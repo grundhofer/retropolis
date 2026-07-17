@@ -24,6 +24,7 @@ describe("enabledPhases", () => {
       "present",
       "vote",
       "discuss",
+      "close",
       "done",
     ]);
   });
@@ -47,7 +48,8 @@ describe("nextPhase / previousPhase", () => {
     expect(nextPhase("lobby", DEFAULT_PHASE_PLAN)).toBe("write");
     expect(nextPhase("write", DEFAULT_PHASE_PLAN)).toBe("present");
     expect(nextPhase("present", DEFAULT_PHASE_PLAN)).toBe("vote");
-    expect(nextPhase("discuss", DEFAULT_PHASE_PLAN)).toBe("done");
+    expect(nextPhase("discuss", DEFAULT_PHASE_PLAN)).toBe("close");
+    expect(nextPhase("close", DEFAULT_PHASE_PLAN)).toBe("done");
     expect(nextPhase("done", DEFAULT_PHASE_PLAN)).toBeNull();
     expect(previousPhase("present", DEFAULT_PHASE_PLAN)).toBe("write");
     expect(previousPhase("lobby", DEFAULT_PHASE_PLAN)).toBeNull();

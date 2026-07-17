@@ -5,7 +5,9 @@ import type { BoardInfo, ClientCommand, ServerEvent } from "@retropolis/shared";
 import { ActionsPanel } from "../components/ActionsPanel.js";
 import { AvatarRow } from "../components/AvatarRow.js";
 import { BoardColumns } from "../components/BoardColumns.js";
+import { BoardMenu } from "../components/BoardMenu.js";
 import { DiscussBar } from "../components/DiscussBar.js";
+import { KudosWall } from "../components/KudosWall.js";
 import { LanguageToggle } from "../components/LanguageToggle.js";
 import { PhaseStepper } from "../components/PhaseStepper.js";
 import { PickerPanel } from "../components/PickerPanel.js";
@@ -185,6 +187,12 @@ function Room({
         if (event.type === "timer.ended" && soundEnabled()) {
           playTimerChime();
         }
+        if (event.type === "board.deleted") {
+          // The board is gone — stop reconnecting (the DO would 404 anyway).
+          dispatch(event);
+          socket.close();
+          return;
+        }
         if (
           event.type === "reject" ||
           (event.type === "error" && event.code === "NOT_JOINED")
@@ -227,6 +235,23 @@ function Room({
     [state.roster],
   );
 
+  if (state.deleted) {
+    return (
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-zinc-50 px-6 text-center">
+        <h1 className="text-2xl font-semibold text-zinc-900">
+          {t("deleted.title")}
+        </h1>
+        <p className="text-zinc-500">{t("deleted.body")}</p>
+        <Link
+          to="/"
+          className="text-accent underline underline-offset-4 hover:text-accent-strong"
+        >
+          {t("notFound.home")}
+        </Link>
+      </div>
+    );
+  }
+
   if (you === null || phasePlan === undefined) {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-zinc-50 text-zinc-400">
@@ -234,6 +259,8 @@ function Room({
       </div>
     );
   }
+
+  const gifsEnabled = config?.gifsEnabled ?? true;
 
   return (
     <ConnectionProvider value={connection}>
@@ -258,6 +285,12 @@ function Room({
               participants={state.roster}
               youId={you.id}
               isAdmin={isAdmin}
+            />
+            <BoardMenu
+              boardId={boardId}
+              isAdmin={isAdmin}
+              gifsEnabled={gifsEnabled}
+              retentionAt={state.retentionAt}
             />
             <LanguageToggle />
           </div>
@@ -315,14 +348,33 @@ function Room({
               </div>
               <Roster participants={state.roster} youId={you.id} />
             </div>
+          ) : state.phase === "close" ? (
+            <KudosWall
+              kudos={state.kudos}
+              roster={state.roster}
+              you={you}
+              isAdmin={isAdmin}
+              gifsEnabled={gifsEnabled}
+              readOnly={false}
+            />
           ) : state.phase === "done" ? (
-            <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-16 text-center">
-              <div>
+            <div className="mx-auto flex max-w-4xl flex-col items-center gap-8 py-12">
+              <div className="text-center">
                 <h2 className="text-2xl font-semibold text-zinc-900">
                   {t("done.title")}
                 </h2>
                 <p className="mt-2 text-zinc-500">{t("done.body")}</p>
               </div>
+              {state.kudos.length > 0 ? (
+                <KudosWall
+                  kudos={state.kudos}
+                  roster={state.roster}
+                  you={you}
+                  isAdmin={isAdmin}
+                  gifsEnabled={gifsEnabled}
+                  readOnly
+                />
+              ) : null}
               {state.actions.length > 0 ? (
                 <ActionsPanel
                   actions={state.actions}
@@ -361,6 +413,7 @@ function Room({
                     topTargetIds: state.votes.topTargetIds,
                     focusId: state.discussFocusId,
                   }}
+                  gifsEnabled={gifsEnabled}
                 />
               </div>
               {showActions ? (

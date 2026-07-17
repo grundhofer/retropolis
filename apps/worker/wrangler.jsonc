@@ -18,6 +18,16 @@
       },
     ],
   },
+  "vars": {
+    // GIF search key. Empty = GIF search degrades to "unavailable". In
+    // production set it as a secret (`wrangler secret put KLIPY_API_KEY`),
+    // which overrides this at runtime.
+    "KLIPY_API_KEY": "",
+    // Stored gif URLs must be https on this host (or a subdomain) — stops a
+    // malicious client planting an arbitrary external <img> tracking beacon.
+    // Set to your GIF provider's media host if it differs from the default.
+    "GIF_HOST_SUFFIX": "klipy.com",
+  },
   "migrations": [
     {
       "tag": "v1",

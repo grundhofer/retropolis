@@ -36,8 +36,12 @@ export const boardConfigSchema = z.object({
   maxPerTarget: z.number().int().min(1).max(10).nullable(),
   /** how many top-voted cards get crowned for discussion */
   topN: z.number().int().min(1).max(10),
+  /** GIF search on notes/kudos; per-board opt-out for privacy-strict teams */
+  gifsEnabled: z.boolean(),
 });
 export type BoardConfig = z.infer<typeof boardConfigSchema>;
+
+export const gifUrlSchema = z.string().url().max(500);
 
 export const DEFAULT_VOTE_CONFIG = {
   votesPerPerson: 3,
@@ -71,6 +75,7 @@ export const noteSchema = z.object({
   // carry the viewer's id so the client knows they are editable.
   authorId: z.string().nullable(),
   text: z.string(),
+  gifUrl: gifUrlSchema.nullable(),
   order: z.number(),
   // notes sharing a groupId form a stack (merged duplicates)
   groupId: hexIdSchema.nullable(),
@@ -78,6 +83,31 @@ export const noteSchema = z.object({
   reactions: z.record(z.string(), z.array(z.string())),
 });
 export type Note = z.infer<typeof noteSchema>;
+
+// Appreciation wall (product spec §7): Management-3.0-style kudo cards
+// addressed to a named teammate, revealed as the closing finale.
+export const KUDO_CARD_TYPES = [
+  "thank-you",
+  "great-job",
+  "well-done",
+  "congratulations",
+  "totally-awesome",
+] as const;
+export const kudoCardTypeSchema = z.enum(KUDO_CARD_TYPES);
+export type KudoCardType = z.infer<typeof kudoCardTypeSchema>;
+
+export const kudoTextSchema = z.string().trim().max(300);
+
+export const kudoSchema = z.object({
+  id: hexIdSchema,
+  cardType: kudoCardTypeSchema,
+  toId: z.string(),
+  // null = anonymous sender, or redacted for viewers on an anonymous board
+  fromId: z.string().nullable(),
+  text: z.string(),
+  gifUrl: gifUrlSchema.nullable(),
+});
+export type Kudo = z.infer<typeof kudoSchema>;
 
 export const timerSchema = z.object({
   endsAt: z.number().nullable(),
@@ -130,12 +160,14 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     noteId: hexIdSchema,
     columnId: hexIdSchema,
     text: noteTextSchema,
+    gifUrl: gifUrlSchema.nullable().optional(),
   }),
   z.object({
     type: z.literal("note.update"),
     opId: hexIdSchema,
     noteId: hexIdSchema,
     text: noteTextSchema,
+    gifUrl: gifUrlSchema.nullable().optional(),
   }),
   z.object({
     type: z.literal("note.delete"),
@@ -254,6 +286,28 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     participantId: z.string(),
     role: participantRoleSchema,
   }),
+
+  // Appreciation wall — created and shown only in the close phase.
+  z.object({
+    type: z.literal("kudo.create"),
+    opId: hexIdSchema,
+    kudoId: hexIdSchema,
+    cardType: kudoCardTypeSchema,
+    toId: z.string(),
+    text: kudoTextSchema,
+    gifUrl: gifUrlSchema.nullable().optional(),
+    anonymous: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("kudo.delete"),
+    opId: hexIdSchema,
+    kudoId: hexIdSchema,
+  }),
+
+  z.object({ type: z.literal("admin.gifs.set"), enabled: z.boolean() }),
+  // Retention: keep the board (clear the 90-day auto-delete) or delete it now.
+  z.object({ type: z.literal("admin.board.keep") }),
+  z.object({ type: z.literal("admin.board.delete") }),
 ]);
 export type ClientCommand = z.infer<typeof clientCommandSchema>;
 
@@ -305,6 +359,10 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     }),
     discussFocusId: hexIdSchema.nullable(),
     actions: z.array(actionSchema),
+    // Kudos are only populated in the close/done phases (staged reveal).
+    kudos: z.array(kudoSchema),
+    /** epoch-ms when the board auto-deletes; null once the admin kept it */
+    retentionAt: z.number().nullable(),
   }),
 
   z.object({ type: z.literal("ack"), opId: hexIdSchema, seq: z.number() }),
@@ -452,6 +510,25 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     seq: z.number(),
     columnId: hexIdSchema,
   }),
+
+  z.object({
+    type: z.literal("kudo.created"),
+    seq: z.number(),
+    kudo: kudoSchema,
+  }),
+  z.object({
+    type: z.literal("kudo.deleted"),
+    seq: z.number(),
+    kudoId: hexIdSchema,
+  }),
+  z.object({
+    type: z.literal("retention.changed"),
+    seq: z.number(),
+    retentionAt: z.number().nullable(),
+  }),
+  // The board was deleted (retention expiry or admin delete-now) — the client
+  // shows a closing screen; the DO is about to be garbage-collected.
+  z.object({ type: z.literal("board.deleted") }),
 
   z.object({
     type: z.literal("error"),
