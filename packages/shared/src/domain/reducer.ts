@@ -9,6 +9,7 @@ import type {
 } from "../protocol.js";
 import { IDLE_TIMER } from "../protocol.js";
 import { phaseRevealed, type Phase } from "./phases.js";
+import type { PickerState, WheelSpin } from "./picker.js";
 
 export interface ClientBoardState {
   board: BoardInfo | null;
@@ -23,6 +24,10 @@ export interface ClientBoardState {
   notes: Note[];
   /** ghost cards: participantId -> columnId they are currently writing in */
   editing: Record<string, string>;
+  /** presenter rotation; null until the board first enters "present" */
+  picker: PickerState | null;
+  /** the wheel animation currently (or most recently) playing */
+  lastSpin: WheelSpin | null;
   lastSeq: number;
 }
 
@@ -37,6 +42,8 @@ export const initialBoardState: ClientBoardState = {
   columns: [],
   notes: [],
   editing: {},
+  picker: null,
+  lastSpin: null,
   lastSeq: 0,
 };
 
@@ -61,6 +68,8 @@ export function applyServerEvent(
         columns: event.columns,
         notes: event.notes,
         editing: {},
+        picker: event.picker,
+        lastSpin: event.lastSpin,
         lastSeq: event.seq,
       };
     }
@@ -70,7 +79,8 @@ export function applyServerEvent(
     case "error":
       return state;
 
-    case "presence.join": {
+    case "presence.join":
+    case "roster.updated": {
       const roster = upsertById(state.roster, event.participant);
       const you =
         state.you && state.you.id === event.participant.id
@@ -78,6 +88,23 @@ export function applyServerEvent(
           : state.you;
       return { ...state, roster, you, lastSeq: seq(state, event.seq) };
     }
+
+    case "picker.changed":
+      return { ...state, picker: event.picker, lastSeq: seq(state, event.seq) };
+
+    case "picker.spun":
+      return {
+        ...state,
+        picker: event.picker,
+        lastSpin: {
+          pool: event.pool,
+          winnerId: event.winnerId,
+          seed: event.seed,
+          startAt: event.startAt,
+          durationMs: event.durationMs,
+        },
+        lastSeq: seq(state, event.seq),
+      };
 
     case "presence.leave": {
       const roster = state.roster.map((p) =>
@@ -142,6 +169,7 @@ export function applyServerEvent(
         readyIds: [],
         editing: {},
         timer: IDLE_TIMER,
+        lastSpin: null, // the picker itself persists across phase changes
         lastSeq: seq(state, event.seq),
       };
     }

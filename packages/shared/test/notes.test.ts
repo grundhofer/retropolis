@@ -12,6 +12,7 @@ const annaNote: Note = {
   authorId: "anna",
   text: "Anna's secret draft",
   order: 1,
+  groupId: null,
   reactions: {},
 };
 const benNote: Note = {

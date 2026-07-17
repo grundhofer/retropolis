@@ -10,6 +10,8 @@ import {
 } from "@retropolis/shared";
 import { useConnection } from "../lib/connection.js";
 
+const NOTE_DRAG_MIME = "application/x-retropolis-note";
+
 export interface NoteCardProps {
   note: Note;
   roster: Participant[];
@@ -17,6 +19,10 @@ export interface NoteCardProps {
   phase: Phase;
   isAdmin: boolean;
   revealIndex: number;
+  /** current presenter — their notes are spotlighted, others dimmed */
+  presenterId: string | null;
+  onDropNote: (sourceNoteId: string, target: Note) => void;
+  onUngroup: (note: Note) => void;
 }
 
 export function NoteCard({
@@ -26,18 +32,27 @@ export function NoteCard({
   phase,
   isAdmin,
   revealIndex,
+  presenterId,
+  onDropNote,
+  onUngroup,
 }: NoteCardProps) {
   const { t } = useTranslation();
   const { mutate } = useConnection();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.text);
+  const [dropHover, setDropHover] = useState(false);
 
   const mine = note.authorId === you.id;
   const author =
     note.authorId === null ? null : roster.find((p) => p.id === note.authorId);
+  const revealed = phaseRevealed(phase) && phase !== "done";
   const canEdit = mine && (phase === "write" || phase === "present");
   const canDelete = (mine || isAdmin) && phase !== "done";
-  const showReactions = phaseRevealed(phase) && phase !== "done";
+  // Before the reveal you drag only your own notes; afterwards the board is
+  // curated collectively.
+  const canDrag = revealed || (phase === "write" && mine);
+  const spotlighted = presenterId !== null && note.authorId === presenterId;
+  const dimmed = presenterId !== null && note.authorId !== presenterId;
 
   function saveEdit(event: React.FormEvent) {
     event.preventDefault();
@@ -85,7 +100,33 @@ export function NoteCard({
   return (
     <article
       data-testid="note-card"
-      className="reveal-in rounded-xl border border-zinc-200 bg-white p-3 shadow-sm"
+      draggable={canDrag && !editing}
+      onDragStart={(event) => {
+        event.dataTransfer.setData(NOTE_DRAG_MIME, note.id);
+        event.dataTransfer.setData("text/plain", note.id);
+        event.dataTransfer.effectAllowed = "move";
+      }}
+      onDragOver={(event) => {
+        if (revealed && event.dataTransfer.types.includes(NOTE_DRAG_MIME)) {
+          event.preventDefault();
+          event.stopPropagation();
+          setDropHover(true);
+        }
+      }}
+      onDragLeave={() => setDropHover(false)}
+      onDrop={(event) => {
+        if (!revealed) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setDropHover(false);
+        const sourceId = event.dataTransfer.getData(NOTE_DRAG_MIME);
+        if (sourceId && sourceId !== note.id) onDropNote(sourceId, note);
+      }}
+      className={`reveal-in rounded-xl border bg-white p-3 shadow-sm transition-opacity ${
+        dropHover ? "border-accent ring-2 ring-accent/40" : "border-zinc-200"
+      } ${spotlighted ? "ring-2 ring-accent" : ""} ${dimmed ? "opacity-45" : ""} ${
+        canDrag && !editing ? "cursor-grab active:cursor-grabbing" : ""
+      }`}
       style={{ animationDelay: `${Math.min(revealIndex, 12) * 45}ms` }}
     >
       {editing ? (
@@ -131,6 +172,17 @@ export function NoteCard({
               </span>
             ) : null}
             <span className="ml-auto flex gap-0.5">
+              {note.groupId !== null && revealed ? (
+                <button
+                  type="button"
+                  aria-label={t("group.ungroup")}
+                  title={t("group.ungroup")}
+                  onClick={() => onUngroup(note)}
+                  className="rounded px-1 text-xs text-zinc-300 hover:bg-zinc-100 hover:text-zinc-500 focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  ⇱
+                </button>
+              ) : null}
               {canEdit ? (
                 <button
                   type="button"
@@ -156,7 +208,7 @@ export function NoteCard({
               ) : null}
             </span>
           </div>
-          {showReactions ? (
+          {revealed ? (
             <div className="mt-2 flex gap-1">
               {REACTION_EMOJI.map((emoji) => {
                 const reactors = note.reactions[emoji] ?? [];
@@ -198,3 +250,5 @@ export function NoteCard({
     </article>
   );
 }
+
+export { NOTE_DRAG_MIME };

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { hexIdSchema } from "./ids.js";
 import { phasePlanSchema, phaseSchema } from "./domain/phases.js";
+import { pickerStateSchema, wheelSpinSchema } from "./domain/picker.js";
 import { sessionKeySchema } from "./session-key.js";
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,8 @@ export const noteSchema = z.object({
   authorId: z.string().nullable(),
   text: z.string(),
   order: z.number(),
+  // notes sharing a groupId form a stack (merged duplicates)
+  groupId: hexIdSchema.nullable(),
   // emoji -> participant ids
   reactions: z.record(z.string(), z.array(z.string())),
 });
@@ -122,6 +125,25 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     emoji: reactionEmojiSchema,
     on: z.boolean(),
   }),
+  // Stacking duplicates: the group id is deterministic (the target's existing
+  // group or the target note's own id) so optimistic echoes match the server.
+  z.object({
+    type: z.literal("note.group"),
+    opId: hexIdSchema,
+    noteId: hexIdSchema,
+    targetNoteId: hexIdSchema,
+  }),
+  z.object({
+    type: z.literal("note.ungroup"),
+    opId: hexIdSchema,
+    noteId: hexIdSchema,
+  }),
+  z.object({
+    type: z.literal("note.move"),
+    opId: hexIdSchema,
+    noteId: hexIdSchema,
+    columnId: hexIdSchema,
+  }),
 
   z.object({ type: z.literal("admin.phase.set"), phase: phaseSchema }),
   z.object({
@@ -152,6 +174,22 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("admin.column.delete"),
     opId: hexIdSchema,
     columnId: hexIdSchema,
+  }),
+
+  z.object({ type: z.literal("admin.picker.spin") }),
+  z.object({ type: z.literal("admin.picker.skip") }),
+  z.object({
+    type: z.literal("admin.picker.exclude"),
+    participantId: z.string(),
+  }),
+  z.object({
+    type: z.literal("admin.picker.include"),
+    participantId: z.string(),
+  }),
+  z.object({
+    type: z.literal("admin.role.set"),
+    participantId: z.string(),
+    role: participantRoleSchema,
   }),
 ]);
 export type ClientCommand = z.infer<typeof clientCommandSchema>;
@@ -187,6 +225,9 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     readyIds: z.array(z.string()),
     columns: z.array(columnSchema),
     notes: z.array(noteSchema),
+    picker: pickerStateSchema.nullable(),
+    /** the spin currently animating, if any — survives reconnect syncs */
+    lastSpin: wheelSpinSchema.nullable(),
   }),
 
   z.object({ type: z.literal("ack"), opId: hexIdSchema, seq: z.number() }),
@@ -252,6 +293,30 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     serverNow: z.number(),
   }),
   z.object({ type: z.literal("timer.ended"), seq: z.number() }),
+
+  // A spin: every client replays the identical wheel animation over `pool`
+  // (segment layout order) from `seed`, landing on `winnerId` at
+  // `startAt + durationMs` (server clock).
+  z.object({
+    type: z.literal("picker.spun"),
+    seq: z.number(),
+    picker: pickerStateSchema,
+    pool: z.array(z.string()),
+    winnerId: z.string(),
+    seed: z.number(),
+    startAt: z.number(),
+    durationMs: z.number(),
+  }),
+  z.object({
+    type: z.literal("picker.changed"),
+    seq: z.number(),
+    picker: pickerStateSchema,
+  }),
+  z.object({
+    type: z.literal("roster.updated"),
+    seq: z.number(),
+    participant: participantSchema,
+  }),
 
   z.object({
     type: z.literal("column.created"),

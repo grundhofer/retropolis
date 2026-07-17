@@ -3,9 +3,12 @@ import type { ClientCommand, ServerEvent } from "@retropolis/shared";
 
 export interface BoardConnection {
   send: (command: ClientCommand) => void;
-  /** Send a mutating command and optimistically apply its expected outcome
+  /** Send a mutating command and optimistically apply its expected outcome(s)
    *  through the shared reducer (seq 0 = local echo). */
-  mutate: (command: ClientCommand, optimistic: ServerEvent) => void;
+  mutate: (
+    command: ClientCommand,
+    optimistic: ServerEvent | ServerEvent[],
+  ) => void;
 }
 
 const ConnectionContext = createContext<BoardConnection | null>(null);
