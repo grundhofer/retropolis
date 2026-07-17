@@ -30,8 +30,32 @@ export type BoardInfo = z.infer<typeof boardInfoSchema>;
 export const boardConfigSchema = z.object({
   anonymous: z.boolean(),
   phasePlan: phasePlanSchema,
+  /** dot-voting budget per person (blind voting, product spec §6) */
+  votesPerPerson: z.number().int().min(1).max(10),
+  /** optional cap per card/stack; null = only the personal budget limits */
+  maxPerTarget: z.number().int().min(1).max(10).nullable(),
+  /** how many top-voted cards get crowned for discussion */
+  topN: z.number().int().min(1).max(10),
 });
 export type BoardConfig = z.infer<typeof boardConfigSchema>;
+
+export const DEFAULT_VOTE_CONFIG = {
+  votesPerPerson: 3,
+  maxPerTarget: null,
+  topN: 3,
+} as const;
+
+export const actionTextSchema = z.string().trim().min(1).max(300);
+
+export const actionStatusSchema = z.enum(["open", "done"]);
+export const actionSchema = z.object({
+  id: hexIdSchema,
+  text: z.string(),
+  /** owning participant; null = unassigned */
+  ownerId: z.string().nullable(),
+  status: actionStatusSchema,
+});
+export type Action = z.infer<typeof actionSchema>;
 
 export const columnSchema = z.object({
   id: hexIdSchema,
@@ -176,6 +200,45 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     columnId: hexIdSchema,
   }),
 
+  // Voting targets are "votables": ungrouped notes or stacks (group ids).
+  z.object({
+    type: z.literal("vote.cast"),
+    opId: hexIdSchema,
+    targetId: hexIdSchema,
+    delta: z.union([z.literal(1), z.literal(-1)]),
+  }),
+  z.object({
+    type: z.literal("admin.vote.config"),
+    votesPerPerson: z.number().int().min(1).max(10),
+    maxPerTarget: z.number().int().min(1).max(10).nullable(),
+    topN: z.number().int().min(1).max(10),
+  }),
+  z.object({
+    type: z.literal("admin.discuss.focus"),
+    targetId: hexIdSchema.nullable(),
+  }),
+
+  z.object({
+    type: z.literal("action.create"),
+    opId: hexIdSchema,
+    actionId: hexIdSchema,
+    text: actionTextSchema,
+    ownerId: z.string().nullable(),
+  }),
+  z.object({
+    type: z.literal("action.update"),
+    opId: hexIdSchema,
+    actionId: hexIdSchema,
+    text: actionTextSchema.optional(),
+    ownerId: z.string().nullable().optional(),
+    status: actionStatusSchema.optional(),
+  }),
+  z.object({
+    type: z.literal("action.delete"),
+    opId: hexIdSchema,
+    actionId: hexIdSchema,
+  }),
+
   z.object({ type: z.literal("admin.picker.spin") }),
   z.object({ type: z.literal("admin.picker.skip") }),
   z.object({
@@ -208,6 +271,7 @@ export const rejectCodeSchema = z.enum([
   "NOT_FOUND",
   "CONFLICT",
   "INVALID",
+  "VOTE_BUDGET",
 ]);
 export type RejectCode = z.infer<typeof rejectCodeSchema>;
 
@@ -228,6 +292,19 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     picker: pickerStateSchema.nullable(),
     /** the spin currently animating, if any — survives reconnect syncs */
     lastSpin: wheelSpinSchema.nullable(),
+    votes: z.object({
+      /** the recipient's OWN votes: targetId -> count (blind voting: nobody
+       *  else's votes ever appear here) */
+      mine: z.record(z.string(), z.number()),
+      /** anonymous progress: how many online participants used their budget */
+      votersDone: z.number(),
+      votersTotal: z.number(),
+      /** revealed tallies — null during (and before) the vote phase */
+      tallies: z.record(z.string(), z.number()).nullable(),
+      topTargetIds: z.array(z.string()),
+    }),
+    discussFocusId: hexIdSchema.nullable(),
+    actions: z.array(actionSchema),
   }),
 
   z.object({ type: z.literal("ack"), opId: hexIdSchema, seq: z.number() }),
@@ -311,6 +388,48 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("picker.changed"),
     seq: z.number(),
     picker: pickerStateSchema,
+  }),
+  z.object({
+    type: z.literal("config.changed"),
+    seq: z.number(),
+    config: boardConfigSchema,
+  }),
+  /** unicast to the caster after an accepted vote — authoritative own votes */
+  z.object({
+    type: z.literal("vote.progress"),
+    yourVotes: z.record(z.string(), z.number()),
+  }),
+  z.object({
+    type: z.literal("vote.meter"),
+    seq: z.number(),
+    votersDone: z.number(),
+    votersTotal: z.number(),
+  }),
+  z.object({
+    type: z.literal("votes.revealed"),
+    seq: z.number(),
+    tallies: z.record(z.string(), z.number()),
+    topTargetIds: z.array(z.string()),
+  }),
+  z.object({
+    type: z.literal("discuss.focus"),
+    seq: z.number(),
+    targetId: hexIdSchema.nullable(),
+  }),
+  z.object({
+    type: z.literal("action.created"),
+    seq: z.number(),
+    action: actionSchema,
+  }),
+  z.object({
+    type: z.literal("action.updated"),
+    seq: z.number(),
+    action: actionSchema,
+  }),
+  z.object({
+    type: z.literal("action.deleted"),
+    seq: z.number(),
+    actionId: hexIdSchema,
   }),
   z.object({
     type: z.literal("roster.updated"),

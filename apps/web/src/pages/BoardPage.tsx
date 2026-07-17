@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router";
 import type { BoardInfo, ClientCommand, ServerEvent } from "@retropolis/shared";
+import { ActionsPanel } from "../components/ActionsPanel.js";
 import { AvatarRow } from "../components/AvatarRow.js";
 import { BoardColumns } from "../components/BoardColumns.js";
+import { DiscussBar } from "../components/DiscussBar.js";
 import { LanguageToggle } from "../components/LanguageToggle.js";
 import { PhaseStepper } from "../components/PhaseStepper.js";
 import { PickerPanel } from "../components/PickerPanel.js";
@@ -11,6 +13,7 @@ import { ReadyBar } from "../components/ReadyBar.js";
 import { Roster } from "../components/Roster.js";
 import { ShareLink } from "../components/ShareLink.js";
 import { TimerPanel } from "../components/TimerPanel.js";
+import { VoteBar } from "../components/VoteBar.js";
 import { WheelOverlay } from "../components/WheelOverlay.js";
 import { fetchBoardInfo } from "../lib/api.js";
 import { playTimerChime, soundEnabled } from "../lib/beep.js";
@@ -208,6 +211,16 @@ function Room({
   const isAdmin = you?.role === "facilitator";
   const phasePlan = state.config?.phasePlan;
   const inLobby = state.phase === "lobby";
+  const config = state.config;
+  const usedVotes = Object.values(state.votes.mine).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+  const talliesShown =
+    state.phase === "discuss" ||
+    state.phase === "close" ||
+    state.phase === "done";
+  const showActions = talliesShown;
 
   const onlineCount = useMemo(
     () => state.roster.filter((p) => p.online).length,
@@ -276,6 +289,18 @@ function Room({
                 isAdmin={isAdmin}
               />
             ) : null}
+            {state.phase === "vote" && config ? (
+              <VoteBar config={config} isAdmin={isAdmin} />
+            ) : null}
+            {state.phase === "discuss" ? (
+              <DiscussBar
+                topTargetIds={state.votes.topTargetIds}
+                tallies={state.votes.tallies}
+                focusId={state.discussFocusId}
+                notes={state.notes}
+                isAdmin={isAdmin}
+              />
+            ) : null}
           </div>
         ) : null}
 
@@ -291,27 +316,62 @@ function Room({
               <Roster participants={state.roster} youId={you.id} />
             </div>
           ) : state.phase === "done" ? (
-            <div className="mx-auto flex max-w-2xl flex-col items-center gap-3 py-16 text-center">
-              <h2 className="text-2xl font-semibold text-zinc-900">
-                {t("done.title")}
-              </h2>
-              <p className="text-zinc-500">{t("done.body")}</p>
+            <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 py-16 text-center">
+              <div>
+                <h2 className="text-2xl font-semibold text-zinc-900">
+                  {t("done.title")}
+                </h2>
+                <p className="mt-2 text-zinc-500">{t("done.body")}</p>
+              </div>
+              {state.actions.length > 0 ? (
+                <ActionsPanel
+                  actions={state.actions}
+                  roster={state.roster}
+                  you={you}
+                  readOnly
+                />
+              ) : null}
             </div>
           ) : (
-            <BoardColumns
-              columns={state.columns}
-              notes={state.notes}
-              roster={state.roster}
-              you={you}
-              phase={state.phase}
-              editing={state.editing}
-              isAdmin={isAdmin}
-              presenterId={
-                state.phase === "present"
-                  ? (state.picker?.current ?? null)
-                  : null
-              }
-            />
+            <div className="flex items-start gap-6">
+              <div className="min-w-0 flex-1">
+                <BoardColumns
+                  columns={state.columns}
+                  notes={state.notes}
+                  roster={state.roster}
+                  you={you}
+                  phase={state.phase}
+                  editing={state.editing}
+                  isAdmin={isAdmin}
+                  presenterId={
+                    state.phase === "present"
+                      ? (state.picker?.current ?? null)
+                      : null
+                  }
+                  deciding={{
+                    voteActive: state.phase === "vote",
+                    mine: state.votes.mine,
+                    remaining: Math.max(
+                      0,
+                      (config?.votesPerPerson ?? 0) - usedVotes,
+                    ),
+                    maxPerTarget: config?.maxPerTarget ?? null,
+                    talliesShown,
+                    tallies: state.votes.tallies,
+                    topTargetIds: state.votes.topTargetIds,
+                    focusId: state.discussFocusId,
+                  }}
+                />
+              </div>
+              {showActions ? (
+                <ActionsPanel
+                  actions={state.actions}
+                  roster={state.roster}
+                  you={you}
+                  readOnly={false}
+                />
+              ) : null}
+            </div>
           )}
         </main>
       </div>

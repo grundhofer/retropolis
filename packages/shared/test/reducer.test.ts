@@ -43,7 +43,10 @@ const sync: ServerEvent = {
   board: { id: "b1", name: "Sprint 12", createdAt: 1 },
   config: {
     anonymous: false,
-    phasePlan: { checkin: false, vote: false, discuss: false, close: false },
+    phasePlan: { checkin: false, vote: true, discuss: true, close: false },
+    votesPerPerson: 3,
+    maxPerTarget: null,
+    topN: 3,
   },
   phase: "write",
   timer: { endsAt: null, pausedRemainingMs: null },
@@ -54,6 +57,15 @@ const sync: ServerEvent = {
   notes: [note("a", anna.id, "mine")],
   picker: null,
   lastSpin: null,
+  votes: {
+    mine: {},
+    votersDone: 0,
+    votersTotal: 0,
+    tallies: null,
+    topTargetIds: [],
+  },
+  discussFocusId: null,
+  actions: [],
 };
 
 function afterSync() {
@@ -296,6 +308,85 @@ describe("picker & roster", () => {
       participant: { ...anna, role: "member" },
     });
     expect(state.you?.role).toBe("member");
+  });
+});
+
+describe("voting & discussion", () => {
+  it("vote.progress tracks only your own votes; votes.revealed brings tallies", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "vote.progress",
+      yourVotes: { [column.id]: 2 },
+    });
+    expect(state.votes.mine[column.id]).toBe(2);
+    expect(state.votes.tallies).toBeNull();
+
+    state = applyServerEvent(state, {
+      type: "votes.revealed",
+      seq: 6,
+      tallies: { [column.id]: 5 },
+      topTargetIds: [column.id],
+    });
+    expect(state.votes.tallies?.[column.id]).toBe(5);
+    expect(state.votes.topTargetIds).toEqual([column.id]);
+  });
+
+  it("rewinding into the vote phase makes voting blind again", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "votes.revealed",
+      seq: 6,
+      tallies: { [column.id]: 5 },
+      topTargetIds: [column.id],
+    });
+    state = applyServerEvent(state, {
+      type: "discuss.focus",
+      seq: 7,
+      targetId: column.id,
+    });
+    expect(state.discussFocusId).toBe(column.id);
+
+    state = applyServerEvent(state, {
+      type: "phase.changed",
+      seq: 8,
+      phase: "vote",
+    });
+    expect(state.votes.tallies).toBeNull();
+    expect(state.votes.topTargetIds).toEqual([]);
+    expect(state.discussFocusId).toBeNull();
+    // own votes survive the rewind
+    expect(state.votes.mine).toEqual({});
+  });
+
+  it("meter and actions flow through", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "vote.meter",
+      seq: 6,
+      votersDone: 1,
+      votersTotal: 2,
+    });
+    expect(state.votes.votersDone).toBe(1);
+
+    const action = {
+      id: "f".repeat(32),
+      text: "Fix the pipeline",
+      ownerId: ben.id,
+      status: "open" as const,
+    };
+    state = applyServerEvent(state, { type: "action.created", seq: 7, action });
+    state = applyServerEvent(state, {
+      type: "action.updated",
+      seq: 8,
+      action: { ...action, status: "done" },
+    });
+    expect(state.actions[0]?.status).toBe("done");
+    state = applyServerEvent(state, {
+      type: "action.deleted",
+      seq: 9,
+      actionId: action.id,
+    });
+    expect(state.actions).toHaveLength(0);
   });
 });
 
