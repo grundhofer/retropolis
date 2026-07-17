@@ -1,6 +1,20 @@
 # Retropolis — Roadmap
 
-Status: draft v1 · 2026-07-17. Milestones are scoped so each ends in something demoable and E2E-tested; the walking skeleton comes first so deploy/test infrastructure never blocks feature work later. Cut lines (MVP / v1.x / v2 / later / never) are defined in `01-product-spec.md` §13.
+Status: **M0–M4 shipped, v1.0 live** · updated 2026-07-18. Milestones are scoped so each ends in something demoable and E2E-tested; the walking skeleton came first so deploy/test infrastructure never blocked feature work later. Cut lines (MVP / v1.x / v2 / later / never) are defined in `01-product-spec.md` §13.
+
+## Shipped — v1.0 (M0–M4)
+
+All four build milestones are complete, deployed to production (https://retropolis.sebastiangrundhoefer.workers.dev), and each passed a multi-agent adversarial review. **164 tests** across four layers (78 shared domain · 74 worker-in-workerd · 2 component · 10 multi-context e2e).
+
+- **M0 — Walking skeleton**: monorepo, EU-jurisdiction BoardRoom DO, WebSocket hibernation, live roster, all four test layers + CI.
+- **M1 — Core loop**: 6 templates, private write phase (server-side redaction), ghost cards, ready-check, phase machine, DO-alarm timer, reveal.
+- **M2 — Presenting**: wheel-of-fortune picker with rotation tracking, synced presenter focus, drag-grouping with vote-preserving stacks, facilitator handoff.
+- **M3 — Deciding**: blind dot-voting (server-enforced budgets, anonymous meter), top-N crowns, synced discussion queue, action items.
+- **M4 — Delight & shipping**: appreciation/kudos wall (close phase, anonymity, staged reveal), Markdown/CSV/JSON export (author-excluded by default, phase-gated for privacy), GIF support via the KLIPY proxy + per-board toggle, 90-day retention with keep/delete-now, emoji picker, full DE/EN.
+
+**Follow-ups before wider launch** (not blocking): register the domain (`getretropolis.de` recommended), enable CI auto-deploy secrets, set `KLIPY_API_KEY` (+ `GIF_HOST_SUFFIX`) to turn on live GIF search, and start the Betriebsrat conversation (see `05-privacy-gdpr.md`).
+
+## Original milestone plan (for reference)
 
 ## M0 — Walking skeleton (foundation)
 
