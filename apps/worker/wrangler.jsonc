@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "retropolis",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    // In dev/build the Vite plugin replaces this with the SPA client build;
+    // ./public only backs `wrangler dev` without Vite and the test pool.
+    "directory": "./public",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BOARD_ROOM",
+        "class_name": "BoardRoom",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // SQLite-backed is the only DO type available on the free plan.
+      "new_sqlite_classes": ["BoardRoom"],
+    },
+  ],
+  "observability": {
+    "enabled": true,
+  },
+  "env": {
+    // PR previews deploy here (worker "retropolis-preview") so preview builds
+    // get their own DO namespace and can never touch production boards.
+    "preview": {
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "BOARD_ROOM",
+            "class_name": "BoardRoom",
+          },
+        ],
+      },
+    },
+  },
+}

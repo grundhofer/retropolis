@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme {
+  /* Calm neutral surface, one teal accent; sticky notes will be the only
+     colorful elements (product spec §12). */
+  --color-accent: #0e7c7b;
+  --color-accent-strong: #0a5958;
+}
+
+/* Notes fade-slide in; the reveal stagger comes from per-card delays. */
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.reveal-in {
+  animation: reveal-in 0.3s ease-out backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal-in {
+    animation: none;
+  }
+  .animate-pulse {
+    animation: none;
+  }
+}
