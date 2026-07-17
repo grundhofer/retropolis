@@ -1,0 +1,21 @@
+{
+  "name": "@retropolis/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "types": "wrangler types",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@retropolis/shared": "workspace:*",
+    "hono": "^4.12.30",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.5",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.111.0"
+  }
+}

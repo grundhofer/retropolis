@@ -1,0 +1,33 @@
+import { boardInfoSchema, type BoardInfo } from "@retropolis/shared";
+import { z } from "zod";
+
+const createBoardResponseSchema = z.object({
+  boardId: z.string(),
+  adminToken: z.string(),
+});
+
+export async function createBoard(
+  name: string,
+  template: string,
+  locale: string,
+): Promise<{ boardId: string; adminToken: string }> {
+  const response = await fetch("/api/boards", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, template, locale }),
+  });
+  if (!response.ok) throw new Error(`create board failed: ${response.status}`);
+  return createBoardResponseSchema.parse(await response.json());
+}
+
+export async function fetchBoardInfo(
+  boardId: string,
+): Promise<BoardInfo | null> {
+  const response = await fetch(`/api/boards/${boardId}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`fetch board failed: ${response.status}`);
+  const data = z
+    .object({ board: boardInfoSchema })
+    .parse(await response.json());
+  return data.board;
+}
