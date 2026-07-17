@@ -48,9 +48,10 @@ export function NoteCard({
   const revealed = phaseRevealed(phase) && phase !== "done";
   const canEdit = mine && (phase === "write" || phase === "present");
   const canDelete = (mine || isAdmin) && phase !== "done";
-  // Before the reveal you drag only your own notes; afterwards the board is
-  // curated collectively.
-  const canDrag = revealed || (phase === "write" && mine);
+  // Reorganizing (drag to group/move, unstack) happens in write (own notes)
+  // and present (everyone) — frozen once voting starts, stacks are votables.
+  const canCurate = phase === "present";
+  const canDrag = canCurate || (phase === "write" && mine);
   const spotlighted = presenterId !== null && note.authorId === presenterId;
   const dimmed = presenterId !== null && note.authorId !== presenterId;
 
@@ -107,7 +108,7 @@ export function NoteCard({
         event.dataTransfer.effectAllowed = "move";
       }}
       onDragOver={(event) => {
-        if (revealed && event.dataTransfer.types.includes(NOTE_DRAG_MIME)) {
+        if (canCurate && event.dataTransfer.types.includes(NOTE_DRAG_MIME)) {
           event.preventDefault();
           event.stopPropagation();
           setDropHover(true);
@@ -115,7 +116,7 @@ export function NoteCard({
       }}
       onDragLeave={() => setDropHover(false)}
       onDrop={(event) => {
-        if (!revealed) return;
+        if (!canCurate) return;
         event.preventDefault();
         event.stopPropagation();
         setDropHover(false);
@@ -172,7 +173,7 @@ export function NoteCard({
               </span>
             ) : null}
             <span className="ml-auto flex gap-0.5">
-              {note.groupId !== null && revealed ? (
+              {note.groupId !== null && canCurate ? (
                 <button
                   type="button"
                   aria-label={t("group.ungroup")}

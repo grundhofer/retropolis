@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   canTransition,
   DEFAULT_PHASE_PLAN,
+  DEFAULT_VOTE_CONFIG,
   EMPTY_PICKER,
   IDLE_TIMER,
   noteVisibleTo,
@@ -13,6 +14,7 @@ import {
   planJoin,
   redactNoteForViewer,
   visibleNotesFor,
+  type Action,
   type BoardConfig,
   type BoardInfo,
   type ClientCommand,
@@ -115,6 +117,19 @@ export class BoardRoom extends DurableObject<Env> {
         participant_id TEXT NOT NULL,
         emoji TEXT NOT NULL,
         PRIMARY KEY (note_id, participant_id, emoji)
+      );
+      CREATE TABLE IF NOT EXISTS votes (
+        target_id TEXT NOT NULL,
+        participant_id TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (target_id, participant_id)
+      );
+      CREATE TABLE IF NOT EXISTS actions (
+        id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        owner_id TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at INTEGER NOT NULL
       );
     `);
     this.migrate();
@@ -304,6 +319,20 @@ export class BoardRoom extends DurableObject<Env> {
       case "admin.role.set":
         this.handleRoleSet(ws, participant, command);
         return;
+      case "vote.cast":
+        this.handleVoteCast(ws, participant, command);
+        return;
+      case "admin.vote.config":
+        this.handleVoteConfig(ws, participant, command);
+        return;
+      case "admin.discuss.focus":
+        this.handleDiscussFocus(ws, participant, command);
+        return;
+      case "action.create":
+      case "action.update":
+      case "action.delete":
+        this.handleAction(ws, participant, command);
+        return;
     }
   }
 
@@ -433,6 +462,7 @@ export class BoardRoom extends DurableObject<Env> {
       { type: "presence.join", seq: this.nextSeq(), participant },
       ws,
     );
+    this.broadcastMeter();
   }
 
   private handleDisconnect(closingSocket: WebSocket): void {
@@ -466,6 +496,8 @@ export class BoardRoom extends DurableObject<Env> {
       { type: "presence.leave", seq: this.nextSeq(), participantId },
       closingSocket,
     );
+
+    this.broadcastMeter();
 
     // The wheel must not land on someone who left: drop them from the pool.
     // Their rejoin re-adds them via the latecomer path (pickerKnows false).
@@ -668,11 +700,20 @@ export class BoardRoom extends DurableObject<Env> {
     }
     const note = this.noteById(cmd.noteId);
     this.sql.exec("DELETE FROM reactions WHERE note_id = ?", cmd.noteId);
+    // Only ungrouped notes own their vote bucket. A stack ANCHOR's id doubles
+    // as the group's vote target — purging it here would destroy the whole
+    // stack's votes before repairGroupAfterLeave migrates them to the survivor.
+    if (row.group_id === null) {
+      this.sql.exec("DELETE FROM votes WHERE target_id = ?", cmd.noteId);
+    }
     this.sql.exec("DELETE FROM notes WHERE id = ?", cmd.noteId);
     const repairedIds =
       row.group_id === null
         ? []
         : this.repairGroupAfterLeave(row.group_id, cmd.noteId);
+    // A deleted votable (or a re-anchored stack) may have stranded own-votes,
+    // shifted the meter, or dropped a crown/focus — re-sync the room.
+    this.reconcileAfterVoteMutation();
     const seq = this.nextSeq();
     this.ack(ws, cmd.opId, seq);
     for (const id of repairedIds) {
@@ -771,6 +812,9 @@ export class BoardRoom extends DurableObject<Env> {
 
     this.setMeta("phase", target);
     this.sql.exec("UPDATE participants SET ready = 0");
+    this.sql.exec(
+      "DELETE FROM board_meta WHERE key IN ('discussFocus', 'meterState')",
+    );
     this.clearTimerMeta();
     void this.ctx.storage.deleteAlarm();
 
@@ -779,6 +823,24 @@ export class BoardRoom extends DurableObject<Env> {
       seq: this.nextSeq(),
       phase: target,
     });
+
+    // Voting closes when the board moves from vote to discuss: everyone gets
+    // the tallies and the crowned top-N in one reveal.
+    if (current === "vote" && target === "discuss") {
+      const { tallies, topTargetIds } = this.talliesAndTop();
+      this.broadcastAll({
+        type: "votes.revealed",
+        seq: this.nextSeq(),
+        tallies,
+        topTargetIds,
+      });
+    }
+    if (target === "vote") {
+      // Votes may have migrated while regrouping in "present" — re-send every
+      // voter their (possibly re-keyed) own votes so no dots are stranded.
+      this.broadcastAllProgress();
+      this.broadcastMeter(true);
+    }
 
     // Every entry into "present": the pool covers everyone currently online
     // who is not already in the rotation (or deliberately excluded). The
@@ -970,8 +1032,14 @@ export class BoardRoom extends DurableObject<Env> {
           "DELETE FROM reactions WHERE note_id IN (SELECT id FROM notes WHERE column_id = ?)",
           cmd.columnId,
         );
+        this.sql.exec(
+          "DELETE FROM votes WHERE target_id IN (SELECT id FROM notes WHERE column_id = ?) OR target_id IN (SELECT DISTINCT group_id FROM notes WHERE column_id = ? AND group_id IS NOT NULL)",
+          cmd.columnId,
+          cmd.columnId,
+        );
         this.sql.exec("DELETE FROM notes WHERE column_id = ?", cmd.columnId);
         this.sql.exec("DELETE FROM columns WHERE id = ?", cmd.columnId);
+        this.reconcileAfterVoteMutation();
         const seq = this.nextSeq();
         this.ack(ws, cmd.opId, seq);
         this.broadcastAll({
@@ -994,12 +1062,14 @@ export class BoardRoom extends DurableObject<Env> {
     cmd: Extract<ClientCommand, { type: "note.group" }>,
   ): void {
     const phase = this.phase();
-    if (!phaseRevealed(phase) || phase === "done") {
+    // Stacks are votables — their membership must be stable once voting
+    // starts, so grouping is a presenting-phase activity (rewind to regroup).
+    if (phase !== "present") {
       this.reject(
         ws,
         cmd.opId,
         "PHASE_LOCKED",
-        "Grouping is available after the reveal",
+        "Grouping happens in the presenting phase",
       );
       return;
     }
@@ -1051,6 +1121,8 @@ export class BoardRoom extends DurableObject<Env> {
       ord,
       note.id,
     );
+    // Votes cast on the note in an earlier round follow it into the stack.
+    if (note.id !== groupId) this.migrateVotes(note.id, groupId);
     changed.push(note.id);
     if (leftGroup !== null) {
       changed.push(...this.repairGroupAfterLeave(leftGroup, note.id));
@@ -1073,12 +1145,14 @@ export class BoardRoom extends DurableObject<Env> {
     cmd: Extract<ClientCommand, { type: "note.ungroup" }>,
   ): void {
     const phase = this.phase();
-    if (!phaseRevealed(phase) || phase === "done") {
+    // Stacks are votables — their membership must be stable once voting
+    // starts, so grouping is a presenting-phase activity (rewind to regroup).
+    if (phase !== "present") {
       this.reject(
         ws,
         cmd.opId,
         "PHASE_LOCKED",
-        "Grouping is available after the reveal",
+        "Grouping happens in the presenting phase",
       );
       return;
     }
@@ -1113,8 +1187,14 @@ export class BoardRoom extends DurableObject<Env> {
     cmd: Extract<ClientCommand, { type: "note.move" }>,
   ): void {
     const phase = this.phase();
-    if (phase === "done") {
-      this.reject(ws, cmd.opId, "PHASE_LOCKED", "The retro is finished");
+    // Like grouping, moving reorganizes votables — frozen once voting starts.
+    if (phase !== "write" && phase !== "present") {
+      this.reject(
+        ws,
+        cmd.opId,
+        "PHASE_LOCKED",
+        "The board is locked for reorganizing",
+      );
       return;
     }
     const note = this.noteRowById(cmd.noteId);
@@ -1128,7 +1208,7 @@ export class BoardRoom extends DurableObject<Env> {
     }
     // Before the reveal you sort only your own notes; afterwards the board is
     // curated collectively.
-    if (!phaseRevealed(phase) && note.author_id !== participant.id) {
+    if (phase === "write" && note.author_id !== participant.id) {
       this.reject(
         ws,
         cmd.opId,
@@ -1192,6 +1272,7 @@ export class BoardRoom extends DurableObject<Env> {
     if (members.length === 1) {
       const lastId = members[0] as string;
       this.sql.exec("UPDATE notes SET group_id = NULL WHERE id = ?", lastId);
+      if (groupId !== lastId) this.migrateVotes(groupId, lastId);
       return [lastId];
     }
     if (members.length >= 2 && groupId === leavingNoteId) {
@@ -1201,6 +1282,7 @@ export class BoardRoom extends DurableObject<Env> {
         newGroupId,
         groupId,
       );
+      this.migrateVotes(groupId, newGroupId);
       return members;
     }
     return [];
@@ -1440,6 +1522,542 @@ export class BoardRoom extends DurableObject<Env> {
   }
 
   // ---------------------------------------------------------------------
+  // voting, discussion & actions
+  // ---------------------------------------------------------------------
+
+  private handleVoteCast(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "vote.cast" }>,
+  ): void {
+    if (this.phase() !== "vote") {
+      this.reject(ws, cmd.opId, "PHASE_LOCKED", "Voting is not open");
+      return;
+    }
+    // Votables are ungrouped notes and stacks (group ids).
+    const kind = this.votableKind(cmd.targetId);
+    if (kind === "grouped-note") {
+      this.reject(
+        ws,
+        cmd.opId,
+        "INVALID",
+        "Vote the stack, not a stacked note",
+      );
+      return;
+    }
+    if (kind === null) {
+      this.reject(ws, cmd.opId, "NOT_FOUND", "Nothing to vote on");
+      return;
+    }
+    const config = this.config();
+    const current = Number(
+      this.sql
+        .exec(
+          "SELECT count FROM votes WHERE target_id = ? AND participant_id = ?",
+          cmd.targetId,
+          participant.id,
+        )
+        .toArray()[0]?.count ?? 0,
+    );
+    const total = Number(
+      this.sql
+        .exec(
+          "SELECT COALESCE(SUM(count), 0) AS total FROM votes WHERE participant_id = ?",
+          participant.id,
+        )
+        .toArray()[0]?.total ?? 0,
+    );
+    const next = current + cmd.delta;
+    if (next < 0) {
+      this.reject(ws, cmd.opId, "INVALID", "No vote to remove");
+      return;
+    }
+    if (cmd.delta > 0 && total + 1 > config.votesPerPerson) {
+      this.reject(ws, cmd.opId, "VOTE_BUDGET", "All votes used");
+      return;
+    }
+    if (
+      cmd.delta > 0 &&
+      config.maxPerTarget !== null &&
+      next > config.maxPerTarget
+    ) {
+      this.reject(
+        ws,
+        cmd.opId,
+        "VOTE_BUDGET",
+        "Vote limit for this card reached",
+      );
+      return;
+    }
+    if (next === 0) {
+      this.sql.exec(
+        "DELETE FROM votes WHERE target_id = ? AND participant_id = ?",
+        cmd.targetId,
+        participant.id,
+      );
+    } else {
+      this.sql.exec(
+        `INSERT INTO votes (target_id, participant_id, count) VALUES (?, ?, ?)
+         ON CONFLICT(target_id, participant_id) DO UPDATE SET count = excluded.count`,
+        cmd.targetId,
+        participant.id,
+        next,
+      );
+    }
+    this.ack(ws, cmd.opId);
+    // Blind voting: the caster (all their tabs) learns only their own votes;
+    // everyone else sees just the anonymous progress meter.
+    this.sendProgressTo(participant.id);
+    this.broadcastMeter();
+  }
+
+  private handleVoteConfig(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.vote.config" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator configures voting",
+      );
+      return;
+    }
+    if (this.phase() === "done") {
+      this.reject(ws, undefined, "PHASE_LOCKED", "The retro is finished");
+      return;
+    }
+    this.setMeta("votesPerPerson", String(cmd.votesPerPerson));
+    this.setMeta(
+      "maxPerTarget",
+      cmd.maxPerTarget === null ? "" : String(cmd.maxPerTarget),
+    );
+    this.setMeta("topN", String(cmd.topN));
+    this.broadcastAll({
+      type: "config.changed",
+      seq: this.nextSeq(),
+      config: this.config(),
+    });
+    const phase = this.phase();
+    if (phase === "vote") {
+      // Lowering a limit mid-vote trims existing over-budget votes and tells
+      // affected voters their new own-vote state.
+      this.clampVotesToConfig();
+      this.broadcastAllProgress();
+      this.broadcastMeter(true);
+    } else if (phase === "discuss" || phase === "close") {
+      // Changing topN after the reveal re-crowns; keep connected clients in
+      // step with what a reconnecting client would compute.
+      const { tallies, topTargetIds } = this.talliesAndTop();
+      this.broadcastAll({
+        type: "votes.revealed",
+        seq: this.nextSeq(),
+        tallies,
+        topTargetIds,
+      });
+    }
+  }
+
+  private handleDiscussFocus(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.discuss.focus" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator steers the discussion",
+      );
+      return;
+    }
+    if (this.phase() !== "discuss") {
+      this.reject(
+        ws,
+        undefined,
+        "PHASE_LOCKED",
+        "Focus works in the discussion phase",
+      );
+      return;
+    }
+    // Only whole votables can be focused: an ungrouped note or a stack — a
+    // buried stacked-note id (or unknown id) is not a discussion target.
+    if (cmd.targetId !== null) {
+      const kind = this.votableKind(cmd.targetId);
+      if (kind !== "note" && kind !== "group") {
+        this.reject(ws, undefined, "NOT_FOUND", "Nothing to focus");
+        return;
+      }
+    }
+    if (cmd.targetId === null)
+      this.sql.exec("DELETE FROM board_meta WHERE key = 'discussFocus'");
+    else this.setMeta("discussFocus", cmd.targetId);
+    this.broadcastAll({
+      type: "discuss.focus",
+      seq: this.nextSeq(),
+      targetId: cmd.targetId,
+    });
+  }
+
+  private handleAction(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<
+      ClientCommand,
+      { type: "action.create" | "action.update" | "action.delete" }
+    >,
+  ): void {
+    const phase = this.phase();
+    // Action items crystallize while discussing; the whole team may capture
+    // and edit them (small-team trust model).
+    if (phase !== "discuss" && phase !== "close") {
+      this.reject(
+        ws,
+        cmd.opId,
+        "PHASE_LOCKED",
+        "Actions are captured while discussing",
+      );
+      return;
+    }
+    if (cmd.type === "action.create") {
+      if (this.actionById(cmd.actionId) !== null) {
+        this.ack(ws, cmd.opId); // idempotent retry
+        return;
+      }
+      if (cmd.ownerId !== null && this.participantById(cmd.ownerId) === null) {
+        this.reject(ws, cmd.opId, "NOT_FOUND", "Owner does not exist");
+        return;
+      }
+      this.sql.exec(
+        "INSERT INTO actions (id, text, owner_id, status, created_at) VALUES (?, ?, ?, 'open', ?)",
+        cmd.actionId,
+        cmd.text,
+        cmd.ownerId,
+        Date.now(),
+      );
+      const action = this.actionById(cmd.actionId);
+      if (action === null) return;
+      const seq = this.nextSeq();
+      this.ack(ws, cmd.opId, seq);
+      this.broadcastAll({ type: "action.created", seq, action });
+      return;
+    }
+    const existing = this.actionById(cmd.actionId);
+    if (cmd.type === "action.delete") {
+      if (existing === null) {
+        this.ack(ws, cmd.opId); // idempotent
+        return;
+      }
+      this.sql.exec("DELETE FROM actions WHERE id = ?", cmd.actionId);
+      const seq = this.nextSeq();
+      this.ack(ws, cmd.opId, seq);
+      this.broadcastAll({
+        type: "action.deleted",
+        seq,
+        actionId: cmd.actionId,
+      });
+      return;
+    }
+    if (existing === null) {
+      this.reject(ws, cmd.opId, "NOT_FOUND", "Action does not exist");
+      return;
+    }
+    if (
+      cmd.ownerId !== undefined &&
+      cmd.ownerId !== null &&
+      this.participantById(cmd.ownerId) === null
+    ) {
+      this.reject(ws, cmd.opId, "NOT_FOUND", "Owner does not exist");
+      return;
+    }
+    this.sql.exec(
+      "UPDATE actions SET text = ?, owner_id = ?, status = ? WHERE id = ?",
+      cmd.text ?? existing.text,
+      cmd.ownerId === undefined ? existing.ownerId : cmd.ownerId,
+      cmd.status ?? existing.status,
+      cmd.actionId,
+    );
+    const action = this.actionById(cmd.actionId);
+    if (action === null) return;
+    const seq = this.nextSeq();
+    this.ack(ws, cmd.opId, seq);
+    this.broadcastAll({ type: "action.updated", seq, action });
+  }
+
+  /** "note" for ungrouped notes, "group" for stack ids, "grouped-note" for
+   *  members of a stack, null for unknown ids. */
+  private votableKind(
+    targetId: string,
+  ): "note" | "group" | "grouped-note" | null {
+    // Group check FIRST: a stack's id equals its anchor member's note id, and
+    // that id must resolve to the stack, not to the buried note.
+    const members = this.sql
+      .exec("SELECT COUNT(*) AS n FROM notes WHERE group_id = ?", targetId)
+      .toArray()[0];
+    if (Number(members?.n ?? 0) > 0) return "group";
+    const note = this.noteRowById(targetId);
+    if (note !== null) return note.group_id === null ? "note" : "grouped-note";
+    return null;
+  }
+
+  private myVotes(participantId: string): Record<string, number> {
+    const mine: Record<string, number> = {};
+    for (const row of this.sql
+      .exec(
+        "SELECT target_id, count FROM votes WHERE participant_id = ?",
+        participantId,
+      )
+      .toArray()) {
+      mine[String(row.target_id)] = Number(row.count);
+    }
+    return mine;
+  }
+
+  private meter(): { votersDone: number; votersTotal: number } {
+    const budget = this.config().votesPerPerson;
+    const online = this.sql
+      .exec("SELECT id FROM participants WHERE online = 1")
+      .toArray()
+      .map((row) => String(row.id));
+    let votersDone = 0;
+    for (const id of online) {
+      const total = Number(
+        this.sql
+          .exec(
+            "SELECT COALESCE(SUM(count), 0) AS total FROM votes WHERE participant_id = ?",
+            id,
+          )
+          .toArray()[0]?.total ?? 0,
+      );
+      if (total >= budget) votersDone++;
+    }
+    return { votersDone, votersTotal: online.length };
+  }
+
+  /** Blind rule: tallies and crowns appear in snapshots only once the board
+   *  moved PAST the vote phase. */
+  private votesForSync(
+    participantId: string,
+    phase: Phase,
+  ): {
+    mine: Record<string, number>;
+    votersDone: number;
+    votersTotal: number;
+    tallies: Record<string, number> | null;
+    topTargetIds: string[];
+  } {
+    const revealedTallies =
+      phase === "discuss" || phase === "close" || phase === "done"
+        ? this.talliesAndTop()
+        : null;
+    return {
+      mine: this.myVotes(participantId),
+      ...this.meter(),
+      tallies: revealedTallies?.tallies ?? null,
+      topTargetIds: revealedTallies?.topTargetIds ?? [],
+    };
+  }
+
+  // Changed-only: broadcasting the meter on EVERY cast would leak the exact
+  // timing and count of everyone's dots (a side-channel far finer than the
+  // "who finished their budget" signal the meter is meant to be).
+  private broadcastMeter(force = false): void {
+    if (this.phase() !== "vote") return;
+    const meter = this.meter();
+    const key = `${meter.votersDone}/${meter.votersTotal}`;
+    if (!force && this.getMeta("meterState") === key) return;
+    this.setMeta("meterState", key);
+    this.broadcastAll({ type: "vote.meter", seq: this.nextSeq(), ...meter });
+  }
+
+  /** Fresh own-votes to EVERY socket of a participant — a second tab (or a
+   *  projector view) must not show a stale budget after a cast. */
+  private sendProgressTo(participantId: string): void {
+    const frame = JSON.stringify({
+      type: "vote.progress",
+      yourVotes: this.myVotes(participantId),
+    });
+    for (const ws of this.ctx.getWebSockets()) {
+      if (readAttachment(ws)?.participantId === participantId) {
+        this.trySend(ws, frame);
+      }
+    }
+  }
+
+  /** Every joined participant gets their own fresh votes — after a structural
+   *  change (delete, vote migration) that may have rewritten vote rows. */
+  private broadcastAllProgress(): void {
+    const seen = new Set<string>();
+    for (const ws of this.ctx.getWebSockets()) {
+      const id = readAttachment(ws)?.participantId ?? null;
+      if (id === null || seen.has(id)) continue;
+      seen.add(id);
+      this.sendProgressTo(id);
+    }
+  }
+
+  // Structural changes (note/column delete, vote migration) can strand
+  // clients with stale own-votes, a stale meter, dead crowns, or a dangling
+  // discussion focus. This re-syncs whatever the current phase surfaces.
+  private reconcileAfterVoteMutation(): void {
+    const phase = this.phase();
+    if (phase === "vote") {
+      this.broadcastAllProgress();
+      this.broadcastMeter();
+      return;
+    }
+    if (phase === "discuss" || phase === "close") {
+      const focus = this.getMeta("discussFocus");
+      const focusKind = focus === null ? null : this.votableKind(focus);
+      if (focus !== null && focusKind !== "note" && focusKind !== "group") {
+        this.sql.exec("DELETE FROM board_meta WHERE key = 'discussFocus'");
+        this.broadcastAll({
+          type: "discuss.focus",
+          seq: this.nextSeq(),
+          targetId: null,
+        });
+      }
+      const { tallies, topTargetIds } = this.talliesAndTop();
+      this.broadcastAll({
+        type: "votes.revealed",
+        seq: this.nextSeq(),
+        tallies,
+        topTargetIds,
+      });
+    }
+  }
+
+  // Trims existing votes to the current config after the facilitator lowers a
+  // limit mid-vote, so early voters don't keep more influence than the new
+  // budget/cap allows. Per-target first, then per-person (highest rows go).
+  private clampVotesToConfig(): void {
+    const config = this.config();
+    if (config.maxPerTarget !== null) {
+      this.sql.exec(
+        "UPDATE votes SET count = ? WHERE count > ?",
+        config.maxPerTarget,
+        config.maxPerTarget,
+      );
+    }
+    const overs = this.sql
+      .exec(
+        "SELECT participant_id, SUM(count) AS total FROM votes GROUP BY participant_id HAVING total > ?",
+        config.votesPerPerson,
+      )
+      .toArray();
+    for (const row of overs) {
+      const pid = String(row.participant_id);
+      let excess = Number(row.total) - config.votesPerPerson;
+      while (excess > 0) {
+        const top = this.sql
+          .exec(
+            "SELECT target_id, count FROM votes WHERE participant_id = ? ORDER BY count DESC, target_id ASC LIMIT 1",
+            pid,
+          )
+          .toArray()[0];
+        if (top === undefined) break;
+        const targetId = String(top.target_id);
+        const remove = Math.min(excess, Number(top.count));
+        const nextCount = Number(top.count) - remove;
+        if (nextCount <= 0) {
+          this.sql.exec(
+            "DELETE FROM votes WHERE target_id = ? AND participant_id = ?",
+            targetId,
+            pid,
+          );
+        } else {
+          this.sql.exec(
+            "UPDATE votes SET count = ? WHERE target_id = ? AND participant_id = ?",
+            nextCount,
+            targetId,
+            pid,
+          );
+        }
+        excess -= remove;
+      }
+    }
+  }
+
+  /** Tallies over CURRENT votables only (dangling vote rows are ignored),
+   *  top-N with a stable tiebreak (count desc, id asc). */
+  private talliesAndTop(): {
+    tallies: Record<string, number>;
+    topTargetIds: string[];
+  } {
+    const votable = new Set<string>();
+    for (const row of this.sql
+      .exec("SELECT id, group_id FROM notes")
+      .toArray()) {
+      if (row.group_id === null) votable.add(String(row.id));
+      else votable.add(String(row.group_id));
+    }
+    const tallies: Record<string, number> = {};
+    for (const row of this.sql
+      .exec(
+        "SELECT target_id, SUM(count) AS total FROM votes GROUP BY target_id",
+      )
+      .toArray()) {
+      const id = String(row.target_id);
+      if (votable.has(id)) tallies[id] = Number(row.total);
+    }
+    const topTargetIds = Object.entries(tallies)
+      .sort(([idA, a], [idB, b]) => b - a || idA.localeCompare(idB))
+      .slice(0, this.config().topN)
+      .map(([id]) => id);
+    return { tallies, topTargetIds };
+  }
+
+  private migrateVotes(from: string, to: string): void {
+    this.sql.exec(
+      `INSERT INTO votes (target_id, participant_id, count)
+         SELECT ?, participant_id, count FROM votes WHERE target_id = ?
+       ON CONFLICT(target_id, participant_id) DO UPDATE SET count = count + excluded.count`,
+      to,
+      from,
+    );
+    this.sql.exec("DELETE FROM votes WHERE target_id = ?", from);
+    // Merging two targets can push a voter's count on the survivor above the
+    // per-target cap — clamp it back (refunding the overflow to their budget).
+    const cap = this.config().maxPerTarget;
+    if (cap !== null) {
+      this.sql.exec(
+        "UPDATE votes SET count = ? WHERE target_id = ? AND count > ?",
+        cap,
+        to,
+        cap,
+      );
+    }
+  }
+
+  private actionById(id: string): Action | null {
+    const row = this.sql
+      .exec("SELECT * FROM actions WHERE id = ?", id)
+      .toArray()[0];
+    if (row === undefined) return null;
+    return {
+      id: String(row.id),
+      text: String(row.text),
+      ownerId: row.owner_id === null ? null : String(row.owner_id),
+      status: row.status === "done" ? "done" : "open",
+    };
+  }
+
+  private actions(): Action[] {
+    return this.sql
+      .exec("SELECT * FROM actions ORDER BY created_at")
+      .toArray()
+      .map((row) => ({
+        id: String(row.id),
+        text: String(row.text),
+        ownerId: row.owner_id === null ? null : String(row.owner_id),
+        status: row.status === "done" ? ("done" as const) : ("open" as const),
+      }));
+  }
+
+  // ---------------------------------------------------------------------
   // snapshots & broadcast plumbing
   // ---------------------------------------------------------------------
 
@@ -1491,6 +2109,9 @@ export class BoardRoom extends DurableObject<Env> {
       columns: this.columns(),
       picker: this.picker(),
       lastSpin: this.activeSpinForSync(),
+      votes: this.votesForSync(participant.id, phase),
+      discussFocusId: this.getMeta("discussFocus"),
+      actions: this.actions(),
       // The snapshot passes through the SAME visibility filter as live
       // events — the snapshot is the classic leak path.
       notes: visibleNotesFor(
@@ -1687,7 +2308,16 @@ export class BoardRoom extends DurableObject<Env> {
   }
 
   private config(): BoardConfig {
-    return { anonymous: this.anonymous(), phasePlan: this.phasePlan() };
+    const maxRaw = this.getMeta("maxPerTarget");
+    return {
+      anonymous: this.anonymous(),
+      phasePlan: this.phasePlan(),
+      votesPerPerson: Number(
+        this.getMeta("votesPerPerson") ?? DEFAULT_VOTE_CONFIG.votesPerPerson,
+      ),
+      maxPerTarget: maxRaw === null || maxRaw === "" ? null : Number(maxRaw),
+      topN: Number(this.getMeta("topN") ?? DEFAULT_VOTE_CONFIG.topN),
+    };
   }
 
   private phase(): Phase {

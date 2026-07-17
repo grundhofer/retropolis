@@ -1,4 +1,5 @@
 import type {
+  Action,
   BoardConfig,
   BoardInfo,
   Column,
@@ -10,6 +11,24 @@ import type {
 import { IDLE_TIMER } from "../protocol.js";
 import { phaseRevealed, type Phase } from "./phases.js";
 import type { PickerState, WheelSpin } from "./picker.js";
+
+export interface VotesState {
+  /** your OWN votes only — blind voting */
+  mine: Record<string, number>;
+  votersDone: number;
+  votersTotal: number;
+  /** null while blind (vote phase and earlier) */
+  tallies: Record<string, number> | null;
+  topTargetIds: string[];
+}
+
+export const EMPTY_VOTES: VotesState = {
+  mine: {},
+  votersDone: 0,
+  votersTotal: 0,
+  tallies: null,
+  topTargetIds: [],
+};
 
 export interface ClientBoardState {
   board: BoardInfo | null;
@@ -28,6 +47,9 @@ export interface ClientBoardState {
   picker: PickerState | null;
   /** the wheel animation currently (or most recently) playing */
   lastSpin: WheelSpin | null;
+  votes: VotesState;
+  discussFocusId: string | null;
+  actions: Action[];
   lastSeq: number;
 }
 
@@ -44,6 +66,9 @@ export const initialBoardState: ClientBoardState = {
   editing: {},
   picker: null,
   lastSpin: null,
+  votes: EMPTY_VOTES,
+  discussFocusId: null,
+  actions: [],
   lastSeq: 0,
 };
 
@@ -70,6 +95,9 @@ export function applyServerEvent(
         editing: {},
         picker: event.picker,
         lastSpin: event.lastSpin,
+        votes: event.votes,
+        discussFocusId: event.discussFocusId,
+        actions: event.actions,
         lastSeq: event.seq,
       };
     }
@@ -91,6 +119,56 @@ export function applyServerEvent(
 
     case "picker.changed":
       return { ...state, picker: event.picker, lastSeq: seq(state, event.seq) };
+
+    case "config.changed":
+      return { ...state, config: event.config, lastSeq: seq(state, event.seq) };
+
+    case "vote.progress":
+      return { ...state, votes: { ...state.votes, mine: event.yourVotes } };
+
+    case "vote.meter":
+      return {
+        ...state,
+        votes: {
+          ...state.votes,
+          votersDone: event.votersDone,
+          votersTotal: event.votersTotal,
+        },
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "votes.revealed":
+      return {
+        ...state,
+        votes: {
+          ...state.votes,
+          tallies: event.tallies,
+          topTargetIds: event.topTargetIds,
+        },
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "discuss.focus":
+      return {
+        ...state,
+        discussFocusId: event.targetId,
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "action.created":
+    case "action.updated":
+      return {
+        ...state,
+        actions: upsertById(state.actions, event.action),
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "action.deleted":
+      return {
+        ...state,
+        actions: state.actions.filter((a) => a.id !== event.actionId),
+        lastSeq: seq(state, event.seq),
+      };
 
     case "picker.spun":
       return {
@@ -162,6 +240,12 @@ export function applyServerEvent(
         : state.notes.filter(
             (n) => n.authorId !== null && n.authorId === state.you?.id,
           );
+      // Rewinding into the vote phase makes voting blind again: tallies and
+      // crowns vanish until the next reveal. The discussion focus is per-phase.
+      const votes =
+        event.phase === "vote" || !phaseRevealed(event.phase)
+          ? { ...state.votes, tallies: null, topTargetIds: [] }
+          : state.votes;
       return {
         ...state,
         phase: event.phase,
@@ -170,6 +254,8 @@ export function applyServerEvent(
         editing: {},
         timer: IDLE_TIMER,
         lastSpin: null, // the picker itself persists across phase changes
+        votes,
+        discussFocusId: null,
         lastSeq: seq(state, event.seq),
       };
     }

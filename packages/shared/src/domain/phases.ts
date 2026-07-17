@@ -25,11 +25,13 @@ export const phasePlanSchema = z.object({
 });
 export type PhasePlan = z.infer<typeof phasePlanSchema>;
 
-// M1 boards run the bare core loop.
+// From M3 on, new boards run the full deciding flow; check-in and the
+// closing/kudos phase arrive with later milestones. Existing boards keep the
+// plan they were created with.
 export const DEFAULT_PHASE_PLAN: PhasePlan = {
   checkin: false,
-  vote: false,
-  discuss: false,
+  vote: true,
+  discuss: true,
   close: false,
 };
 

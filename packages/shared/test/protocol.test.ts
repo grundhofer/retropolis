@@ -110,10 +110,13 @@ describe("parseServerEvent", () => {
           anonymous: false,
           phasePlan: {
             checkin: false,
-            vote: false,
-            discuss: false,
+            vote: true,
+            discuss: true,
             close: false,
           },
+          votesPerPerson: 3,
+          maxPerTarget: null,
+          topN: 3,
         },
         phase: "write",
         timer: { endsAt: null, pausedRemainingMs: null },
@@ -131,6 +134,15 @@ describe("parseServerEvent", () => {
         notes: [],
         picker: null,
         lastSpin: null,
+        votes: {
+          mine: {},
+          votersDone: 0,
+          votersTotal: 0,
+          tallies: null,
+          topTargetIds: [],
+        },
+        discussFocusId: null,
+        actions: [],
       }),
     );
     expect(event?.type).toBe("sync");

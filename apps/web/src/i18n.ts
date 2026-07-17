@@ -120,6 +120,31 @@ const resources = {
       group: {
         ungroup: "Unstack note",
       },
+      vote: {
+        yourVotes: "Your votes",
+        remaining_one: "{{count}} vote left",
+        remaining_other: "{{count}} votes left",
+        meter: "{{done}}/{{total}} finished voting",
+        settings: "Voting",
+        votesPerPerson: "Votes per person",
+        maxPerTarget: "Max per card",
+        topN: "Top cards",
+        apply: "Apply",
+        plus: "Add a vote",
+        minus: "Remove a vote",
+      },
+      discuss: {
+        queue: "Discussion",
+      },
+      action: {
+        title: "Action items",
+        placeholder: "What are we going to do?",
+        add: "Add",
+        unassigned: "Unassigned",
+        toggle: "Mark as done",
+        delete: "Delete action",
+        empty: "No action items yet — capture decisions while you discuss.",
+      },
       roster: {
         makeFacilitator: "Make facilitator",
         removeFacilitator: "Remove facilitator",
@@ -256,6 +281,32 @@ const resources = {
       },
       group: {
         ungroup: "Aus Stapel lösen",
+      },
+      vote: {
+        yourVotes: "Deine Stimmen",
+        remaining_one: "{{count}} Stimme übrig",
+        remaining_other: "{{count}} Stimmen übrig",
+        meter: "{{done}}/{{total}} fertig abgestimmt",
+        settings: "Abstimmung",
+        votesPerPerson: "Stimmen pro Person",
+        maxPerTarget: "Max. pro Karte",
+        topN: "Top-Karten",
+        apply: "Übernehmen",
+        plus: "Stimme hinzufügen",
+        minus: "Stimme entfernen",
+      },
+      discuss: {
+        queue: "Diskussion",
+      },
+      action: {
+        title: "Action Items",
+        placeholder: "Was nehmen wir uns vor?",
+        add: "Hinzufügen",
+        unassigned: "Ohne Verantwortliche:n",
+        toggle: "Als erledigt markieren",
+        delete: "Action Item löschen",
+        empty:
+          "Noch keine Action Items — haltet Entscheidungen beim Diskutieren fest.",
       },
       roster: {
         makeFacilitator: "Zur Moderation machen",

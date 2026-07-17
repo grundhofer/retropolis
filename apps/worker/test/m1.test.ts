@@ -385,10 +385,12 @@ describe("review-fleet regressions", () => {
     });
     await admin.socket.waitFor((e) => e.type === "ack");
 
-    admin.socket.send({ type: "admin.phase.set", phase: "done" });
-    await admin.socket.waitFor(
-      (e) => e.type === "phase.changed" && e.phase === "done",
-    );
+    for (const phase of ["vote", "discuss", "done"] as const) {
+      admin.socket.send({ type: "admin.phase.set", phase });
+      await admin.socket.waitFor(
+        (e) => e.type === "phase.changed" && e.phase === phase,
+      );
+    }
     admin.socket.send({ type: "note.delete", opId: opId(), noteId });
     const rejected = await admin.socket.waitFor((e) => e.type === "reject");
     if (rejected.type !== "reject") throw new Error("unreachable");

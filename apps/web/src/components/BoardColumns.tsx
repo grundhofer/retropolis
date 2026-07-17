@@ -12,6 +12,19 @@ import {
 import { useConnection } from "../lib/connection.js";
 import { NOTE_DRAG_MIME, NoteCard } from "./NoteCard.js";
 
+export interface DecidingState {
+  voteActive: boolean;
+  /** your own votes (blind voting — nobody else's ever reach the client) */
+  mine: Record<string, number>;
+  remaining: number;
+  maxPerTarget: number | null;
+  /** tallies/crowns are shown from the discussion phase on */
+  talliesShown: boolean;
+  tallies: Record<string, number> | null;
+  topTargetIds: string[];
+  focusId: string | null;
+}
+
 export interface BoardColumnsProps {
   columns: Column[];
   notes: Note[];
@@ -21,6 +34,7 @@ export interface BoardColumnsProps {
   editing: Record<string, string>;
   isAdmin: boolean;
   presenterId: string | null;
+  deciding: DecidingState;
 }
 
 type ColumnItem =
@@ -28,9 +42,22 @@ type ColumnItem =
   | { kind: "stack"; groupId: string; notes: Note[] };
 
 export function BoardColumns(props: BoardColumnsProps) {
-  const { columns, notes, phase, isAdmin } = props;
+  const { columns, notes, phase, isAdmin, deciding } = props;
   const { t } = useTranslation();
   const { mutate } = useConnection();
+
+  function castVote(targetId: string, delta: 1 | -1) {
+    const current = deciding.mine[targetId] ?? 0;
+    const next = current + delta;
+    if (next < 0) return;
+    const yourVotes = { ...deciding.mine };
+    if (next === 0) delete yourVotes[targetId];
+    else yourVotes[targetId] = next;
+    mutate(
+      { type: "vote.cast", opId: generateHexId(), targetId, delta },
+      { type: "vote.progress", yourVotes },
+    );
+  }
   const [addingColumn, setAddingColumn] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
 
@@ -100,9 +127,8 @@ export function BoardColumns(props: BoardColumnsProps) {
     setAddingColumn(false);
   }
 
-  const allowColumnDrop = phaseRevealed(phase)
-    ? phase !== "done"
-    : phase === "write";
+  // Reorganizing is frozen once voting starts (stacks are votables).
+  const allowColumnDrop = phase === "write" || phase === "present";
 
   return (
     <div className="flex items-start gap-4 overflow-x-auto pb-4">
@@ -114,6 +140,7 @@ export function BoardColumns(props: BoardColumnsProps) {
           onDropNote={groupNotes}
           onUngroup={ungroupNote}
           onMoveToColumn={allowColumnDrop ? moveNote : null}
+          onVote={castVote}
         />
       ))}
       {isAdmin ? (
@@ -168,14 +195,17 @@ function BoardColumn({
   editing,
   isAdmin,
   presenterId,
+  deciding,
   onDropNote,
   onUngroup,
   onMoveToColumn,
+  onVote,
 }: BoardColumnsProps & {
   column: Column;
   onDropNote: (sourceNoteId: string, target: Note) => void;
   onUngroup: (note: Note) => void;
   onMoveToColumn: ((sourceNoteId: string, columnId: string) => void) | null;
+  onVote: (targetId: string, delta: 1 | -1) => void;
 }) {
   const { t } = useTranslation();
   const { mutate } = useConnection();
@@ -339,34 +369,38 @@ function BoardColumn({
       </header>
 
       <div className="flex flex-col gap-2">
-        {items.map((item, index) =>
-          item.kind === "note" ? (
-            <NoteCard
-              key={item.note.id}
-              note={item.note}
-              revealIndex={index}
-              {...cardProps}
-            />
-          ) : (
-            <div
-              key={item.groupId}
-              data-testid="note-stack"
-              className="flex flex-col gap-1.5 rounded-2xl border border-accent/30 bg-accent/5 p-1.5"
+        {items.map((item, index) => {
+          const targetId = item.kind === "note" ? item.note.id : item.groupId;
+          return (
+            <TargetFrame
+              key={targetId}
+              targetId={targetId}
+              deciding={deciding}
+              onVote={onVote}
             >
-              <span className="px-1.5 text-xs font-semibold text-accent-strong tabular-nums">
-                ×{item.notes.length}
-              </span>
-              {item.notes.map((note) => (
-                <NoteCard
-                  key={note.id}
-                  note={note}
-                  revealIndex={index}
-                  {...cardProps}
-                />
-              ))}
-            </div>
-          ),
-        )}
+              {item.kind === "note" ? (
+                <NoteCard note={item.note} revealIndex={index} {...cardProps} />
+              ) : (
+                <div
+                  data-testid="note-stack"
+                  className="flex flex-col gap-1.5 rounded-2xl border border-accent/30 bg-accent/5 p-1.5"
+                >
+                  <span className="px-1.5 text-xs font-semibold text-accent-strong tabular-nums">
+                    ×{item.notes.length}
+                  </span>
+                  {item.notes.map((note) => (
+                    <NoteCard
+                      key={note.id}
+                      note={note}
+                      revealIndex={index}
+                      {...cardProps}
+                    />
+                  ))}
+                </div>
+              )}
+            </TargetFrame>
+          );
+        })}
         {ghosts.map((ghost) => (
           <div
             key={ghost.id}
@@ -393,6 +427,98 @@ function BoardColumn({
         ) : null}
       </div>
     </section>
+  );
+}
+
+// Chrome around each votable (ungrouped note or stack): the blind vote
+// control during voting, crown/tally/focus once discussion opened.
+function TargetFrame({
+  targetId,
+  deciding,
+  onVote,
+  children,
+}: {
+  targetId: string;
+  deciding: DecidingState;
+  onVote: (targetId: string, delta: 1 | -1) => void;
+  children: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  const rank = deciding.topTargetIds.indexOf(targetId);
+  const focused = deciding.focusId === targetId;
+  const dim = deciding.focusId !== null && !focused;
+  const myCount = deciding.mine[targetId] ?? 0;
+  const tally = deciding.talliesShown
+    ? deciding.tallies?.[targetId]
+    : undefined;
+  const plusDisabled =
+    deciding.remaining <= 0 ||
+    (deciding.maxPerTarget !== null && myCount >= deciding.maxPerTarget);
+
+  return (
+    <div
+      data-testid="vote-target"
+      className={`rounded-2xl transition-opacity ${
+        focused ? "ring-2 ring-accent ring-offset-2" : ""
+      } ${dim ? "opacity-40" : ""}`}
+    >
+      {deciding.talliesShown && (rank >= 0 || tally !== undefined) ? (
+        <div className="mb-1 flex items-center gap-1.5 px-1">
+          {rank >= 0 ? (
+            <span
+              data-testid="crown"
+              className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
+            >
+              👑 {rank + 1}
+            </span>
+          ) : null}
+          {tally !== undefined ? (
+            <span
+              data-testid="tally"
+              className="text-xs text-zinc-500 tabular-nums"
+            >
+              {tally} ●
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {children}
+      {deciding.voteActive ? (
+        <div
+          data-testid="vote-control"
+          className="mt-1 flex items-center justify-end gap-1.5"
+        >
+          <button
+            type="button"
+            data-testid="vote-minus"
+            aria-label={t("vote.minus")}
+            disabled={myCount === 0}
+            onClick={() => onVote(targetId, -1)}
+            className="size-6 rounded-full border border-zinc-200 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-30"
+          >
+            −
+          </button>
+          <span
+            data-testid="vote-count"
+            className={`min-w-5 text-center text-sm font-semibold tabular-nums ${
+              myCount > 0 ? "text-accent-strong" : "text-zinc-300"
+            }`}
+          >
+            {myCount}
+          </span>
+          <button
+            type="button"
+            data-testid="vote-plus"
+            aria-label={t("vote.plus")}
+            disabled={plusDisabled}
+            onClick={() => onVote(targetId, 1)}
+            className="size-6 rounded-full bg-accent text-sm text-white hover:bg-accent-strong disabled:opacity-30"
+          >
+            +
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
