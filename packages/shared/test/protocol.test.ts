@@ -117,6 +117,7 @@ describe("parseServerEvent", () => {
           votesPerPerson: 3,
           maxPerTarget: null,
           topN: 3,
+          gifsEnabled: true,
         },
         phase: "write",
         timer: { endsAt: null, pausedRemainingMs: null },
@@ -143,6 +144,8 @@ describe("parseServerEvent", () => {
         },
         discussFocusId: null,
         actions: [],
+        kudos: [],
+        retentionAt: null,
       }),
     );
     expect(event?.type).toBe("sync");

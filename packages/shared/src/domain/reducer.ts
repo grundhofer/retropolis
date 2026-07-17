@@ -3,6 +3,7 @@ import type {
   BoardConfig,
   BoardInfo,
   Column,
+  Kudo,
   Note,
   Participant,
   ServerEvent,
@@ -50,6 +51,13 @@ export interface ClientBoardState {
   votes: VotesState;
   discussFocusId: string | null;
   actions: Action[];
+  /** appreciation wall — populated only from the close phase on */
+  kudos: Kudo[];
+  /** epoch-ms auto-delete deadline; null once the admin kept the board */
+  retentionAt: number | null;
+  /** set once the board is deleted (retention or admin) — client shows a
+   *  closing screen and stops trying to reconnect */
+  deleted: boolean;
   lastSeq: number;
 }
 
@@ -69,6 +77,9 @@ export const initialBoardState: ClientBoardState = {
   votes: EMPTY_VOTES,
   discussFocusId: null,
   actions: [],
+  kudos: [],
+  retentionAt: null,
+  deleted: false,
   lastSeq: 0,
 };
 
@@ -98,6 +109,9 @@ export function applyServerEvent(
         votes: event.votes,
         discussFocusId: event.discussFocusId,
         actions: event.actions,
+        kudos: event.kudos,
+        retentionAt: event.retentionAt,
+        deleted: false,
         lastSeq: event.seq,
       };
     }
@@ -169,6 +183,30 @@ export function applyServerEvent(
         actions: state.actions.filter((a) => a.id !== event.actionId),
         lastSeq: seq(state, event.seq),
       };
+
+    case "kudo.created":
+      return {
+        ...state,
+        kudos: upsertById(state.kudos, event.kudo),
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "kudo.deleted":
+      return {
+        ...state,
+        kudos: state.kudos.filter((k) => k.id !== event.kudoId),
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "retention.changed":
+      return {
+        ...state,
+        retentionAt: event.retentionAt,
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "board.deleted":
+      return { ...state, deleted: true };
 
     case "picker.spun":
       return {
@@ -246,6 +284,10 @@ export function applyServerEvent(
         event.phase === "vote" || !phaseRevealed(event.phase)
           ? { ...state.votes, tallies: null, topTargetIds: [] }
           : state.votes;
+      // The appreciation wall is a staged reveal — leaving close/done hides it
+      // again (the server stops sending kudos outside those phases).
+      const kudos =
+        event.phase === "close" || event.phase === "done" ? state.kudos : [];
       return {
         ...state,
         phase: event.phase,
@@ -256,6 +298,7 @@ export function applyServerEvent(
         lastSpin: null, // the picker itself persists across phase changes
         votes,
         discussFocusId: null,
+        kudos,
         lastSeq: seq(state, event.seq),
       };
     }

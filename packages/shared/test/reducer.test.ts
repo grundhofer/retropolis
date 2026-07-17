@@ -30,6 +30,7 @@ function note(id: string, authorId: string, text: string): Note {
     columnId: column.id,
     authorId,
     text,
+    gifUrl: null,
     order: 1,
     groupId: null,
     reactions: {},
@@ -47,6 +48,7 @@ const sync: ServerEvent = {
     votesPerPerson: 3,
     maxPerTarget: null,
     topN: 3,
+    gifsEnabled: true,
   },
   phase: "write",
   timer: { endsAt: null, pausedRemainingMs: null },
@@ -66,6 +68,8 @@ const sync: ServerEvent = {
   },
   discussFocusId: null,
   actions: [],
+  kudos: [],
+  retentionAt: null,
 };
 
 function afterSync() {
@@ -421,5 +425,94 @@ describe("columns", () => {
       column: { ...column, name: "What rocked" },
     });
     expect(state.columns[0]?.name).toBe("What rocked");
+  });
+});
+
+describe("appreciation & retention (M4)", () => {
+  const kudo = {
+    id: "d".repeat(32),
+    cardType: "great-job" as const,
+    toId: ben.id,
+    fromId: anna.id,
+    text: "shipped it",
+    gifUrl: null,
+  };
+
+  it("kudo.created upserts and kudo.deleted removes", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, { type: "kudo.created", seq: 6, kudo });
+    expect(state.kudos).toHaveLength(1);
+    state = applyServerEvent(state, {
+      type: "kudo.created",
+      seq: 7,
+      kudo: { ...kudo, text: "shipped it well" },
+    });
+    expect(state.kudos).toHaveLength(1);
+    expect(state.kudos[0]?.text).toBe("shipped it well");
+    state = applyServerEvent(state, {
+      type: "kudo.deleted",
+      seq: 8,
+      kudoId: kudo.id,
+    });
+    expect(state.kudos).toHaveLength(0);
+  });
+
+  it("leaving the close phase hides the kudos wall again", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "phase.changed",
+      seq: 6,
+      phase: "close",
+    });
+    state = applyServerEvent(state, { type: "kudo.created", seq: 7, kudo });
+    expect(state.kudos).toHaveLength(1);
+    // rewind to discuss — kudos vanish
+    state = applyServerEvent(state, {
+      type: "phase.changed",
+      seq: 8,
+      phase: "discuss",
+    });
+    expect(state.kudos).toHaveLength(0);
+    // done keeps them
+    state = applyServerEvent(state, {
+      type: "phase.changed",
+      seq: 9,
+      phase: "close",
+    });
+    state = applyServerEvent(state, { type: "kudo.created", seq: 10, kudo });
+    state = applyServerEvent(state, {
+      type: "phase.changed",
+      seq: 11,
+      phase: "done",
+    });
+    expect(state.kudos).toHaveLength(1);
+  });
+
+  it("retention.changed updates the deadline; board.deleted sets the flag", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "retention.changed",
+      seq: 6,
+      retentionAt: null,
+    });
+    expect(state.retentionAt).toBeNull();
+    state = applyServerEvent(state, { type: "board.deleted" });
+    expect(state.deleted).toBe(true);
+  });
+
+  it("note gifUrl flows through note events", () => {
+    let state = afterSync();
+    const gifNote = {
+      ...note("e", anna.id, "with gif"),
+      gifUrl: "https://cdn.example/x.gif",
+    };
+    state = applyServerEvent(state, {
+      type: "note.created",
+      seq: 6,
+      note: gifNote,
+    });
+    expect(state.notes.find((n) => n.id === gifNote.id)?.gifUrl).toBe(
+      "https://cdn.example/x.gif",
+    );
   });
 });

@@ -10,6 +10,7 @@ import {
   type ServerEvent,
 } from "@retropolis/shared";
 import { useConnection } from "../lib/connection.js";
+import { GifPicker } from "./GifPicker.js";
 import { NOTE_DRAG_MIME, NoteCard } from "./NoteCard.js";
 
 export interface DecidingState {
@@ -35,6 +36,7 @@ export interface BoardColumnsProps {
   isAdmin: boolean;
   presenterId: string | null;
   deciding: DecidingState;
+  gifsEnabled: boolean;
 }
 
 type ColumnItem =
@@ -196,6 +198,7 @@ function BoardColumn({
   isAdmin,
   presenterId,
   deciding,
+  gifsEnabled,
   onDropNote,
   onUngroup,
   onMoveToColumn,
@@ -423,7 +426,12 @@ function BoardColumn({
           </div>
         ))}
         {phaseAllowsComposer(phase) ? (
-          <NoteComposer columnId={column.id} you={you} notes={columnNotes} />
+          <NoteComposer
+            columnId={column.id}
+            you={you}
+            notes={columnNotes}
+            gifsEnabled={gifsEnabled}
+          />
         ) : null}
       </div>
     </section>
@@ -530,14 +538,18 @@ function NoteComposer({
   columnId,
   you,
   notes,
+  gifsEnabled,
 }: {
   columnId: string;
   you: Participant;
   notes: Note[];
+  gifsEnabled: boolean;
 }) {
   const { t } = useTranslation();
   const { send, mutate } = useConnection();
   const [text, setText] = useState("");
+  const [gifUrl, setGifUrl] = useState<string | null>(null);
+  const [gifOpen, setGifOpen] = useState(false);
 
   function submit() {
     const trimmed = text.trim();
@@ -553,6 +565,7 @@ function NoteComposer({
         noteId,
         columnId,
         text: trimmed,
+        gifUrl,
       },
       {
         type: "note.created",
@@ -562,6 +575,7 @@ function NoteComposer({
           columnId,
           authorId: you.id,
           text: trimmed,
+          gifUrl,
           order,
           groupId: null,
           reactions: {},
@@ -569,6 +583,8 @@ function NoteComposer({
       },
     );
     setText("");
+    setGifUrl(null);
+    setGifOpen(false);
   }
 
   return (
@@ -595,14 +611,52 @@ function NoteComposer({
         placeholder={t("note.placeholder")}
         className="w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-zinc-300 focus-visible:outline-2 focus-visible:outline-accent"
       />
-      {text.trim() !== "" ? (
-        <button
-          type="submit"
-          className="mt-1 rounded-lg bg-accent px-3 py-1 text-sm font-medium text-white hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        >
-          {t("note.add")}
-        </button>
+      {gifUrl !== null ? (
+        <div className="relative mt-1 w-fit">
+          <img src={gifUrl} alt="" className="max-h-24 rounded-lg" />
+          <button
+            type="button"
+            onClick={() => setGifUrl(null)}
+            aria-label={t("gif.remove")}
+            className="absolute -top-1.5 -right-1.5 rounded-full bg-zinc-800 px-1.5 text-xs text-white"
+          >
+            ✕
+          </button>
+        </div>
       ) : null}
+      <div className="mt-1 flex items-center gap-2">
+        {text.trim() !== "" ? (
+          <button
+            type="submit"
+            className="rounded-lg bg-accent px-3 py-1 text-sm font-medium text-white hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            {t("note.add")}
+          </button>
+        ) : null}
+        {gifsEnabled && gifUrl === null ? (
+          <div className="relative">
+            <button
+              type="button"
+              data-testid={`composer-gif-${columnId}`}
+              onClick={() => setGifOpen(!gifOpen)}
+              className="rounded-lg border border-zinc-200 px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50"
+            >
+              🎞 {t("gif.add")}
+            </button>
+            {gifOpen ? (
+              <div className="absolute bottom-9 left-0 z-40">
+                <GifPicker
+                  onPick={(url) => {
+                    setGifUrl(url);
+                    setGifOpen(false);
+                  }}
+                  onClose={() => setGifOpen(false)}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </form>
   );
 }

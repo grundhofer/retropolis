@@ -385,7 +385,7 @@ describe("review-fleet regressions", () => {
     });
     await admin.socket.waitFor((e) => e.type === "ack");
 
-    for (const phase of ["vote", "discuss", "done"] as const) {
+    for (const phase of ["vote", "discuss", "close", "done"] as const) {
       admin.socket.send({ type: "admin.phase.set", phase });
       await admin.socket.waitFor(
         (e) => e.type === "phase.changed" && e.phase === phase,

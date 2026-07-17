@@ -3,10 +3,15 @@ import { z } from "zod";
 import {
   boardLocaleSchema,
   boardNameSchema,
+  EXPORT_FORMATS,
+  exportContentType,
+  renderExport,
   templateColumnNames,
   templateKeySchema,
+  type ExportFormat,
 } from "@retropolis/shared";
 import { boardStub } from "./board-stub.js";
+import { searchGifs } from "./gifs.js";
 import { generateSecret, isSecretShaped } from "./ids.js";
 
 export { BoardRoom } from "./board-room.js";
@@ -52,6 +57,45 @@ app.get("/api/boards/:id", async (c) => {
     return c.json({ error: "BOARD_NOT_FOUND" }, 404);
   }
   return c.json({ board });
+});
+
+// Export a board. Anyone with the (capability) board id may export; author
+// names are excluded by default — pass ?authors=true to include them.
+app.get("/api/boards/:id/export", async (c) => {
+  const boardId = c.req.param("id");
+  if (!isSecretShaped(boardId)) {
+    return c.json({ error: "BOARD_NOT_FOUND" }, 404);
+  }
+  const format = (c.req.query("format") ?? "md") as ExportFormat;
+  if (!EXPORT_FORMATS.includes(format)) {
+    return c.json({ error: "INVALID_FORMAT" }, 400);
+  }
+  const includeAuthors = c.req.query("authors") === "true";
+  const data = await boardStub(c.env, boardId).exportBoard(includeAuthors);
+  if (data === null) {
+    return c.json({ error: "BOARD_NOT_FOUND" }, 404);
+  }
+  const safeName =
+    data.boardName.replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "") ||
+    "retro";
+  return new Response(renderExport(format, data), {
+    headers: {
+      "content-type": exportContentType(format),
+      "content-disposition": `attachment; filename="${safeName}.${format}"`,
+    },
+  });
+});
+
+// GIF search proxy — keeps the KLIPY key server-side and hides employee IPs /
+// search terms from the provider. Degrades to empty when no key is configured.
+app.get("/api/gifs/search", async (c) => {
+  const query = c.req.query("q") ?? "";
+  const locale = c.req.query("locale") ?? "en";
+  const result = await searchGifs(c.env, query.slice(0, 100), locale);
+  return c.json(result, 200, {
+    // brief edge cache for repeated popular queries
+    "cache-control": "public, max-age=300",
+  });
 });
 
 app.get("/api/boards/:id/ws", async (c) => {

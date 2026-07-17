@@ -32,8 +32,23 @@ import {
   WHEEL_SPIN_MS,
   WHEEL_START_DELAY_MS,
   wheelSpinSchema,
+  type BoardExport,
+  type Kudo,
+  type KudoCardType,
 } from "@retropolis/shared";
 import { generateSecret, randomIndex, safeEqual } from "./ids.js";
+
+// Boards auto-delete after this window unless the facilitator keeps them.
+export const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+interface KudoRow {
+  id: string;
+  card_type: string;
+  to_id: string;
+  from_id: string | null;
+  text: string;
+  gif_url: string | null;
+}
 
 interface SocketAttachment {
   participantId: string | null;
@@ -57,6 +72,7 @@ interface NoteRow {
   text: string;
   ord: number;
   group_id: string | null;
+  gif_url: string | null;
 }
 
 export interface BoardCreation {
@@ -131,6 +147,15 @@ export class BoardRoom extends DurableObject<Env> {
         status TEXT NOT NULL DEFAULT 'open',
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS kudos (
+        id TEXT PRIMARY KEY,
+        card_type TEXT NOT NULL,
+        to_id TEXT NOT NULL,
+        from_id TEXT,
+        text TEXT NOT NULL,
+        gif_url TEXT,
+        created_at INTEGER NOT NULL
+      );
     `);
     this.migrate();
     // Heartbeats are answered by the runtime without waking a hibernated DO.
@@ -162,21 +187,27 @@ export class BoardRoom extends DurableObject<Env> {
     if (!noteColumns.includes("group_id")) {
       this.sql.exec("ALTER TABLE notes ADD COLUMN group_id TEXT");
     }
+    if (!noteColumns.includes("gif_url")) {
+      this.sql.exec("ALTER TABLE notes ADD COLUMN gif_url TEXT");
+    }
   }
 
   // Called once by the Worker when a board is created (RPC).
   async initialize(creation: BoardCreation): Promise<void> {
     if (this.getMeta("id") !== null) return; // idempotent: replays must not rotate the admin token
     const now = Date.now();
+    const retentionAt = now + RETENTION_MS;
     this.sql.exec(
       `INSERT INTO board_meta (key, value) VALUES
          ('id', ?), ('name', ?), ('adminToken', ?), ('createdAt', ?), ('seq', '0'),
-         ('phase', 'lobby'), ('anonymous', '0'), ('phasePlan', ?)`,
+         ('phase', 'lobby'), ('anonymous', '0'), ('phasePlan', ?),
+         ('gifsEnabled', '1'), ('retentionAt', ?)`,
       creation.boardId,
       creation.name,
       creation.adminToken,
       String(now),
       JSON.stringify(DEFAULT_PHASE_PLAN),
+      String(retentionAt),
     );
     for (const column of creation.columns) {
       this.sql.exec(
@@ -186,6 +217,9 @@ export class BoardRoom extends DurableObject<Env> {
         column.order,
       );
     }
+    // Auto-delete after the retention window (GDPR / decided). The DO's single
+    // alarm slot is shared with the phase timer — nearest deadline wins.
+    await this.rescheduleAlarm();
   }
 
   // RPC: board metadata for the join page; null if never created.
@@ -333,6 +367,21 @@ export class BoardRoom extends DurableObject<Env> {
       case "action.delete":
         this.handleAction(ws, participant, command);
         return;
+      case "kudo.create":
+        this.handleKudoCreate(ws, participant, command);
+        return;
+      case "kudo.delete":
+        this.handleKudoDelete(ws, participant, command);
+        return;
+      case "admin.gifs.set":
+        this.handleGifsSet(ws, participant, command);
+        return;
+      case "admin.board.keep":
+        void this.handleBoardKeep(ws, participant);
+        return;
+      case "admin.board.delete":
+        void this.handleBoardDelete(ws, participant);
+        return;
     }
   }
 
@@ -344,20 +393,68 @@ export class BoardRoom extends DurableObject<Env> {
     this.handleDisconnect(ws);
   }
 
-  // Timer expiry. Alarms are at-least-once and this DO has exactly one alarm
-  // slot — from M4 on, retention shares it (nearest-deadline wins).
+  // The DO has exactly ONE alarm slot, shared by the phase timer and the
+  // retention auto-delete — whichever deadline is nearest is armed. On fire we
+  // handle every deadline that is now due, then re-arm for whatever remains.
   override async alarm(): Promise<void> {
-    const endsAt = this.getMeta("timerEndsAt");
-    if (endsAt === null) return;
-    if (Date.now() < Number(endsAt) - 250) {
-      // spurious/early fire — re-arm
-      await this.ctx.storage.setAlarm(Number(endsAt));
+    const now = Date.now();
+
+    const retentionAt = this.getMeta("retentionAt");
+    if (retentionAt !== null && now >= Number(retentionAt) - 250) {
+      await this.destroyBoard(); // terminal — the object is GC'd
       return;
     }
-    // Broadcast BEFORE clearing: if anything throws, the at-least-once retry
-    // still finds the deadline and re-broadcasts (clients handle duplicates).
-    this.broadcastAll({ type: "timer.ended", seq: this.nextSeq() });
-    this.clearTimerMeta();
+
+    const timerEndsAt = this.getMeta("timerEndsAt");
+    if (timerEndsAt !== null && now >= Number(timerEndsAt) - 250) {
+      // Broadcast BEFORE clearing: if anything throws, the at-least-once retry
+      // still finds the deadline and re-broadcasts (clients dedupe).
+      this.broadcastAll({ type: "timer.ended", seq: this.nextSeq() });
+      this.clearTimerMeta();
+    }
+
+    await this.rescheduleAlarm();
+  }
+
+  // Arms the alarm for the nearest pending deadline (timer or retention).
+  private async rescheduleAlarm(): Promise<void> {
+    const deadlines = [this.getMeta("timerEndsAt"), this.getMeta("retentionAt")]
+      .filter((v): v is string => v !== null)
+      .map(Number);
+    if (deadlines.length === 0) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    await this.ctx.storage.setAlarm(Math.min(...deadlines));
+  }
+
+  // Wipes all board data (leaving the empty schema so the live instance stays
+  // queryable and reports the board as gone) after telling connected clients.
+  // getMeta("id") now returns null everywhere → the board 404s like one that
+  // never existed. deleteAll() is avoided because it drops the tables, which
+  // makes a same-instance query fail with "no such table".
+  private async destroyBoard(): Promise<void> {
+    this.broadcastAll({ type: "board.deleted" });
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.close(1000, "board deleted");
+      } catch {
+        // already closing
+      }
+    }
+    await this.ctx.storage.deleteAlarm();
+    for (const table of [
+      "board_meta",
+      "participants",
+      "columns",
+      "notes",
+      "reactions",
+      "votes",
+      "actions",
+      "kudos",
+    ]) {
+      this.sql.exec(`DELETE FROM ${table}`);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -601,13 +698,14 @@ export class BoardRoom extends DurableObject<Env> {
         .toArray()[0]?.next ?? 1,
     );
     this.sql.exec(
-      "INSERT INTO notes (id, column_id, author_id, text, ord, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO notes (id, column_id, author_id, text, ord, created_at, gif_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
       cmd.noteId,
       cmd.columnId,
       participant.id,
       cmd.text,
       ord,
       Date.now(),
+      this.sanitizeGifUrl(cmd.gifUrl) ?? null,
     );
     const note = this.noteById(cmd.noteId);
     if (note === null) return;
@@ -653,11 +751,23 @@ export class BoardRoom extends DurableObject<Env> {
       );
       return;
     }
-    this.sql.exec(
-      "UPDATE notes SET text = ? WHERE id = ?",
-      cmd.text,
-      cmd.noteId,
-    );
+    // gifUrl omitted = leave as-is; explicit null = clear it; a string is
+    // validated (disallowed hosts / disabled gifs drop to null).
+    const gifUrl = this.sanitizeGifUrl(cmd.gifUrl);
+    if (gifUrl === undefined) {
+      this.sql.exec(
+        "UPDATE notes SET text = ? WHERE id = ?",
+        cmd.text,
+        cmd.noteId,
+      );
+    } else {
+      this.sql.exec(
+        "UPDATE notes SET text = ?, gif_url = ? WHERE id = ?",
+        cmd.text,
+        gifUrl,
+        cmd.noteId,
+      );
+    }
     const note = this.noteById(cmd.noteId);
     if (note === null) return;
     const seq = this.nextSeq();
@@ -816,7 +926,8 @@ export class BoardRoom extends DurableObject<Env> {
       "DELETE FROM board_meta WHERE key IN ('discussFocus', 'meterState')",
     );
     this.clearTimerMeta();
-    void this.ctx.storage.deleteAlarm();
+    // Re-arm for retention (must NOT drop the retention alarm on phase change).
+    void this.rescheduleAlarm();
 
     this.broadcastAll({
       type: "phase.changed",
@@ -887,6 +998,15 @@ export class BoardRoom extends DurableObject<Env> {
           : null;
       });
     }
+
+    // Entering close/done: re-push existing kudos so a rewind-then-re-enter
+    // doesn't leave connected clients with an empty wall (their reducer
+    // cleared kudos on the way out). Idempotent upserts on the client.
+    if (target === "close" || target === "done") {
+      for (const kudo of this.allKudos()) {
+        this.broadcastAll({ type: "kudo.created", seq: this.nextSeq(), kudo });
+      }
+    }
   }
 
   private handleTimer(
@@ -913,9 +1033,7 @@ export class BoardRoom extends DurableObject<Env> {
 
     switch (cmd.type) {
       case "admin.timer.start": {
-        const endsAt = now + cmd.durationSec * 1000;
-        this.setTimerMeta(endsAt, null);
-        void this.ctx.storage.setAlarm(endsAt);
+        this.setTimerMeta(now + cmd.durationSec * 1000, null);
         break;
       }
       case "admin.timer.pause": {
@@ -924,7 +1042,6 @@ export class BoardRoom extends DurableObject<Env> {
           return;
         }
         this.setTimerMeta(null, Math.max(0, timer.endsAt - now));
-        void this.ctx.storage.deleteAlarm();
         break;
       }
       case "admin.timer.resume": {
@@ -932,16 +1049,12 @@ export class BoardRoom extends DurableObject<Env> {
           this.reject(ws, undefined, "INVALID", "No paused timer");
           return;
         }
-        const endsAt = now + timer.pausedRemainingMs;
-        this.setTimerMeta(endsAt, null);
-        void this.ctx.storage.setAlarm(endsAt);
+        this.setTimerMeta(now + timer.pausedRemainingMs, null);
         break;
       }
       case "admin.timer.extend": {
         if (timer.endsAt !== null) {
-          const endsAt = timer.endsAt + cmd.addSec * 1000;
-          this.setTimerMeta(endsAt, null);
-          void this.ctx.storage.setAlarm(endsAt);
+          this.setTimerMeta(timer.endsAt + cmd.addSec * 1000, null);
         } else if (timer.pausedRemainingMs !== null) {
           this.setTimerMeta(null, timer.pausedRemainingMs + cmd.addSec * 1000);
         } else {
@@ -952,10 +1065,11 @@ export class BoardRoom extends DurableObject<Env> {
       }
       case "admin.timer.stop": {
         this.clearTimerMeta();
-        void this.ctx.storage.deleteAlarm();
         break;
       }
     }
+    // One alarm slot, shared with retention — re-arm for the nearest deadline.
+    void this.rescheduleAlarm();
 
     this.broadcastAll({
       type: "timer.changed",
@@ -2058,6 +2172,282 @@ export class BoardRoom extends DurableObject<Env> {
   }
 
   // ---------------------------------------------------------------------
+  // appreciation wall, GIFs & retention
+  // ---------------------------------------------------------------------
+
+  private handleKudoCreate(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "kudo.create" }>,
+  ): void {
+    if (this.phase() !== "close") {
+      this.reject(
+        ws,
+        cmd.opId,
+        "PHASE_LOCKED",
+        "Kudos are shared in the close phase",
+      );
+      return;
+    }
+    if (this.participantById(cmd.toId) === null) {
+      this.reject(ws, cmd.opId, "NOT_FOUND", "Recipient does not exist");
+      return;
+    }
+    if (this.kudoRowById(cmd.kudoId) !== null) {
+      this.ack(ws, cmd.opId); // idempotent retry
+      return;
+    }
+    // The sender is recorded server-side only if they chose to be shown —
+    // anonymous kudos never carry the sender id on the wire.
+    const fromId = cmd.anonymous ? null : participant.id;
+    this.sql.exec(
+      "INSERT INTO kudos (id, card_type, to_id, from_id, text, gif_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      cmd.kudoId,
+      cmd.cardType,
+      cmd.toId,
+      fromId,
+      cmd.text,
+      this.sanitizeGifUrl(cmd.gifUrl) ?? null,
+      Date.now(),
+    );
+    const kudo = this.kudoById(cmd.kudoId);
+    if (kudo === null) return;
+    const seq = this.nextSeq();
+    this.ack(ws, cmd.opId, seq);
+    this.broadcastAll({ type: "kudo.created", seq, kudo });
+  }
+
+  private handleKudoDelete(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "kudo.delete" }>,
+  ): void {
+    if (this.phase() !== "close") {
+      this.reject(
+        ws,
+        cmd.opId,
+        "PHASE_LOCKED",
+        "The appreciation wall is closed",
+      );
+      return;
+    }
+    const row = this.kudoRowById(cmd.kudoId);
+    if (row === null) {
+      this.ack(ws, cmd.opId); // idempotent
+      return;
+    }
+    // Sender (if known) or a facilitator may remove a kudo.
+    const isAdmin = participant.role === "facilitator";
+    if (row.from_id !== participant.id && !isAdmin) {
+      this.reject(
+        ws,
+        cmd.opId,
+        "NOT_AUTHOR",
+        "Only the sender or facilitator can remove this",
+      );
+      return;
+    }
+    this.sql.exec("DELETE FROM kudos WHERE id = ?", cmd.kudoId);
+    const seq = this.nextSeq();
+    this.ack(ws, cmd.opId, seq);
+    this.broadcastAll({ type: "kudo.deleted", seq, kudoId: cmd.kudoId });
+  }
+
+  private handleGifsSet(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.gifs.set" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator changes settings",
+      );
+      return;
+    }
+    this.setMeta("gifsEnabled", cmd.enabled ? "1" : "0");
+    this.broadcastAll({
+      type: "config.changed",
+      seq: this.nextSeq(),
+      config: this.config(),
+    });
+  }
+
+  private async handleBoardKeep(
+    ws: WebSocket,
+    participant: ParticipantRow,
+  ): Promise<void> {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator manages retention",
+      );
+      return;
+    }
+    this.sql.exec("DELETE FROM board_meta WHERE key = 'retentionAt'");
+    await this.rescheduleAlarm();
+    this.broadcastAll({
+      type: "retention.changed",
+      seq: this.nextSeq(),
+      retentionAt: null,
+    });
+  }
+
+  private async handleBoardDelete(
+    ws: WebSocket,
+    participant: ParticipantRow,
+  ): Promise<void> {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator can delete the board",
+      );
+      return;
+    }
+    await this.destroyBoard();
+  }
+
+  private kudoRowById(id: string): KudoRow | null {
+    return (
+      (this.sql.exec("SELECT * FROM kudos WHERE id = ?", id).toArray()[0] as
+        KudoRow | undefined) ?? null
+    );
+  }
+
+  private kudoById(id: string): Kudo | null {
+    const row = this.kudoRowById(id);
+    return row === null ? null : rowToKudo(row);
+  }
+
+  private allKudos(): Kudo[] {
+    return this.sql
+      .exec("SELECT * FROM kudos ORDER BY created_at")
+      .toArray()
+      .map((row) => rowToKudo(row as unknown as KudoRow));
+  }
+
+  // A stored gif URL must be https on the allowlisted provider host AND the
+  // board must have GIFs enabled — otherwise it is dropped (not stored). This
+  // stops a modified client from planting an arbitrary external <img> that
+  // would leak every viewer's IP, and enforces the per-board opt-out that is
+  // otherwise only a client-side gate. Preserves undefined ("keep" on update).
+  private sanitizeGifUrl(
+    url: string | null | undefined,
+  ): string | null | undefined {
+    if (url === undefined) return undefined;
+    if (url === null) return null;
+    if (this.getMeta("gifsEnabled") === "0") return null;
+    let host: string;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") return null;
+      host = parsed.hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+    const suffix = (this.env.GIF_HOST_SUFFIX || "klipy.com").toLowerCase();
+    return host === suffix || host.endsWith("." + suffix) ? url : null;
+  }
+
+  // Staged reveal: the wall is empty until the close phase; anonymous kudos
+  // never expose the sender id (kept server-side only for delete authorship).
+  private kudosForPhase(phase: Phase, _viewerId: string): Kudo[] {
+    if (phase !== "close" && phase !== "done") return [];
+    return this.allKudos();
+  }
+
+  // RPC: structured board snapshot for the export route. Author/owner/sender
+  // names are included only when the caller opts in (default: depersonalized).
+  async exportBoard(includeAuthors: boolean): Promise<BoardExport | null> {
+    if (this.getMeta("id") === null) return null;
+    const names = new Map(
+      this.sql
+        .exec("SELECT id, name FROM participants")
+        .toArray()
+        .map((row) => [String(row.id), String(row.name)] as const),
+    );
+    const nameOf = (id: string | null): string | null =>
+      includeAuthors && id !== null ? (names.get(id) ?? null) : null;
+
+    // Privacy: notes are private per-author until the reveal, and the export
+    // has no viewer to scope to — so pre-reveal exports carry NO note bodies
+    // (mirrors the write-phase wire rule). Vote tallies stay blind until the
+    // reveal closes (discuss onward), exactly like the live votesForSync.
+    const phase = this.phase();
+    const notesRevealed = phaseRevealed(phase);
+    const talliesShown =
+      phase === "discuss" || phase === "close" || phase === "done";
+    const revealedVotes = talliesShown
+      ? this.talliesAndTop()
+      : { tallies: {} as Record<string, number>, topTargetIds: [] as string[] };
+
+    const notesByColumn = new Map<string, Note[]>();
+    if (notesRevealed) {
+      for (const note of this.allNotes()) {
+        const list = notesByColumn.get(note.columnId) ?? [];
+        list.push(note);
+        notesByColumn.set(note.columnId, list);
+      }
+    }
+
+    const columns = this.columns().map((column) => {
+      // Every note is exported (stack members included — no content dropped);
+      // stacks are kept adjacent, and only the votable (ungrouped note or
+      // stack anchor) carries the tally so votes aren't double-counted.
+      const notes = (notesByColumn.get(column.id) ?? [])
+        .slice()
+        .sort(
+          (a, b) =>
+            (a.groupId ?? a.id).localeCompare(b.groupId ?? b.id) ||
+            a.order - b.order ||
+            a.id.localeCompare(b.id),
+        );
+      return {
+        name: column.name,
+        notes: notes.map((n) => {
+          const isVotable = n.groupId === null || n.groupId === n.id;
+          const votableId = n.groupId ?? n.id;
+          const rank = isVotable
+            ? revealedVotes.topTargetIds.indexOf(votableId)
+            : -1;
+          return {
+            text: n.text,
+            gifUrl: n.gifUrl,
+            authorName: nameOf(n.authorId),
+            votes: isVotable
+              ? (revealedVotes.tallies[votableId] ?? null)
+              : null,
+            crownedRank: rank >= 0 ? rank + 1 : null,
+          };
+        }),
+      };
+    });
+
+    return {
+      boardName: this.getMeta("name") ?? "",
+      createdAt: Number(this.getMeta("createdAt") ?? 0),
+      columns,
+      actions: this.actions().map((a) => ({
+        text: a.text,
+        ownerName: nameOf(a.ownerId),
+        done: a.status === "done",
+      })),
+      kudos: this.allKudos().map((k) => ({
+        cardType: k.cardType,
+        toName: names.get(k.toId) ?? "someone",
+        fromName: nameOf(k.fromId),
+        text: k.text,
+      })),
+    };
+  }
+
+  // ---------------------------------------------------------------------
   // snapshots & broadcast plumbing
   // ---------------------------------------------------------------------
 
@@ -2112,6 +2502,9 @@ export class BoardRoom extends DurableObject<Env> {
       votes: this.votesForSync(participant.id, phase),
       discussFocusId: this.getMeta("discussFocus"),
       actions: this.actions(),
+      // Staged reveal: the appreciation wall only appears from the close phase.
+      kudos: this.kudosForPhase(phase, participant.id),
+      retentionAt: this.retentionAt(),
       // The snapshot passes through the SAME visibility filter as live
       // events — the snapshot is the classic leak path.
       notes: visibleNotesFor(
@@ -2274,6 +2667,7 @@ export class BoardRoom extends DurableObject<Env> {
       columnId: row.column_id,
       authorId: row.author_id,
       text: row.text,
+      gifUrl: row.gif_url ?? null,
       order: Number(row.ord),
       groupId: row.group_id ?? null,
       reactions: reactionsByNote.get(row.id) ?? {},
@@ -2317,7 +2711,14 @@ export class BoardRoom extends DurableObject<Env> {
       ),
       maxPerTarget: maxRaw === null || maxRaw === "" ? null : Number(maxRaw),
       topN: Number(this.getMeta("topN") ?? DEFAULT_VOTE_CONFIG.topN),
+      // Default true for boards created before the toggle existed.
+      gifsEnabled: this.getMeta("gifsEnabled") !== "0",
     };
+  }
+
+  private retentionAt(): number | null {
+    const raw = this.getMeta("retentionAt");
+    return raw === null ? null : Number(raw);
   }
 
   private phase(): Phase {
@@ -2390,6 +2791,17 @@ function rowToParticipant(row: ParticipantRow): Participant {
     color: row.color,
     role: row.role as ParticipantRole,
     online: row.online === 1,
+  };
+}
+
+function rowToKudo(row: KudoRow): Kudo {
+  return {
+    id: row.id,
+    cardType: row.card_type as KudoCardType,
+    toId: row.to_id,
+    fromId: row.from_id ?? null,
+    text: row.text,
+    gifUrl: row.gif_url ?? null,
   };
 }
 

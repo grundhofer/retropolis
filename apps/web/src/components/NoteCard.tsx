@@ -161,6 +161,14 @@ export function NoteCard({
           <p className="text-sm whitespace-pre-wrap text-zinc-800">
             {note.text}
           </p>
+          {note.gifUrl !== null ? (
+            <img
+              src={note.gifUrl}
+              alt=""
+              loading="lazy"
+              className="mt-2 max-h-40 w-full rounded-lg object-contain"
+            />
+          ) : null}
           <div className="mt-2 flex items-center gap-1.5">
             {author ? (
               <span className="flex items-center gap-1 text-xs text-zinc-400">
