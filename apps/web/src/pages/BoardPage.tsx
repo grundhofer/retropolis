@@ -6,10 +6,12 @@ import { AvatarRow } from "../components/AvatarRow.js";
 import { BoardColumns } from "../components/BoardColumns.js";
 import { LanguageToggle } from "../components/LanguageToggle.js";
 import { PhaseStepper } from "../components/PhaseStepper.js";
+import { PickerPanel } from "../components/PickerPanel.js";
 import { ReadyBar } from "../components/ReadyBar.js";
 import { Roster } from "../components/Roster.js";
 import { ShareLink } from "../components/ShareLink.js";
 import { TimerPanel } from "../components/TimerPanel.js";
+import { WheelOverlay } from "../components/WheelOverlay.js";
 import { fetchBoardInfo } from "../lib/api.js";
 import { playTimerChime, soundEnabled } from "../lib/beep.js";
 import { ConnectionProvider, type BoardConnection } from "../lib/connection.js";
@@ -151,7 +153,8 @@ function Room({
     () => ({
       send: (command: ClientCommand) => socketRef.current?.send(command),
       mutate: (command, optimistic) => {
-        useBoardStore.getState().dispatch(optimistic);
+        const events = Array.isArray(optimistic) ? optimistic : [optimistic];
+        for (const event of events) useBoardStore.getState().dispatch(event);
         socketRef.current?.send(command);
       },
     }),
@@ -221,6 +224,7 @@ function Room({
 
   return (
     <ConnectionProvider value={connection}>
+      <WheelOverlay />
       <div className="flex min-h-dvh flex-col bg-zinc-50">
         <header className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-zinc-200 bg-white px-6 py-3">
           <div className="flex min-w-0 items-baseline gap-3">
@@ -237,7 +241,11 @@ function Room({
             />
           </div>
           <div className="flex items-center gap-3">
-            <AvatarRow participants={state.roster} />
+            <AvatarRow
+              participants={state.roster}
+              youId={you.id}
+              isAdmin={isAdmin}
+            />
             <LanguageToggle />
           </div>
         </header>
@@ -261,6 +269,13 @@ function Room({
               roster={state.roster}
               youId={you.id}
             />
+            {state.phase === "present" ? (
+              <PickerPanel
+                picker={state.picker}
+                roster={state.roster}
+                isAdmin={isAdmin}
+              />
+            ) : null}
           </div>
         ) : null}
 
@@ -291,6 +306,11 @@ function Room({
               phase={state.phase}
               editing={state.editing}
               isAdmin={isAdmin}
+              presenterId={
+                state.phase === "present"
+                  ? (state.picker?.current ?? null)
+                  : null
+              }
             />
           )}
         </main>

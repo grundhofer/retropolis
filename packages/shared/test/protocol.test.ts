@@ -129,6 +129,8 @@ describe("parseServerEvent", () => {
         readyIds: [],
         columns: [],
         notes: [],
+        picker: null,
+        lastSpin: null,
       }),
     );
     expect(event?.type).toBe("sync");

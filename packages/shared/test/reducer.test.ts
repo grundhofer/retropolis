@@ -31,6 +31,7 @@ function note(id: string, authorId: string, text: string): Note {
     authorId,
     text,
     order: 1,
+    groupId: null,
     reactions: {},
   };
 }
@@ -51,6 +52,8 @@ const sync: ServerEvent = {
   readyIds: [],
   columns: [column],
   notes: [note("a", anna.id, "mine")],
+  picker: null,
+  lastSpin: null,
 };
 
 function afterSync() {
@@ -232,6 +235,67 @@ describe("presence & ready", () => {
       ready: false,
     });
     expect(state.readyIds).toEqual([]);
+  });
+});
+
+describe("picker & roster", () => {
+  it("picker.spun stores the picker and the wheel animation", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "picker.spun",
+      seq: 6,
+      picker: {
+        remaining: [ben.id],
+        presented: [],
+        current: anna.id,
+        excluded: [],
+      },
+      pool: [anna.id, ben.id],
+      winnerId: anna.id,
+      seed: 42,
+      startAt: 1000,
+      durationMs: 4500,
+    });
+    expect(state.picker?.current).toBe(anna.id);
+    expect(state.lastSpin?.winnerId).toBe(anna.id);
+  });
+
+  it("phase.changed keeps the picker but clears the spin animation", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "picker.spun",
+      seq: 6,
+      picker: { remaining: [], presented: [], current: anna.id, excluded: [] },
+      pool: [anna.id],
+      winnerId: anna.id,
+      seed: 1,
+      startAt: 1000,
+      durationMs: 4500,
+    });
+    state = applyServerEvent(state, {
+      type: "phase.changed",
+      seq: 7,
+      phase: "present",
+    });
+    expect(state.picker?.current).toBe(anna.id);
+    expect(state.lastSpin).toBeNull();
+  });
+
+  it("roster.updated upserts a participant and tracks `you` role changes", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "roster.updated",
+      seq: 6,
+      participant: { ...ben, role: "facilitator" },
+    });
+    expect(state.roster.find((p) => p.id === ben.id)?.role).toBe("facilitator");
+
+    state = applyServerEvent(state, {
+      type: "roster.updated",
+      seq: 7,
+      participant: { ...anna, role: "member" },
+    });
+    expect(state.you?.role).toBe("member");
   });
 });
 

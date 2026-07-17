@@ -107,6 +107,24 @@ const resources = {
         delete: "Delete column",
         reallyDelete: "Really delete?",
       },
+      picker: {
+        spin: "Spin the wheel",
+        next: "Next person",
+        finishRound: "Finish the round",
+        presenting: "{{name}} is presenting",
+        skip: "Skip",
+        winner: "{{name}} is up!",
+        everyone: "Everyone presented! 🎉",
+        exclude: "Take {{name}} off the wheel",
+      },
+      group: {
+        ungroup: "Unstack note",
+      },
+      roster: {
+        makeFacilitator: "Make facilitator",
+        removeFacilitator: "Remove facilitator",
+        you: "(you)",
+      },
       done: {
         title: "Retro finished",
         body: "This board is archived and read-only.",
@@ -225,6 +243,24 @@ const resources = {
         rename: "Spalte umbenennen",
         delete: "Spalte löschen",
         reallyDelete: "Wirklich löschen?",
+      },
+      picker: {
+        spin: "Rad drehen",
+        next: "Nächste Person",
+        finishRound: "Runde abschließen",
+        presenting: "{{name}} präsentiert",
+        skip: "Überspringen",
+        winner: "{{name}} ist dran!",
+        everyone: "Alle haben präsentiert! 🎉",
+        exclude: "{{name}} vom Rad nehmen",
+      },
+      group: {
+        ungroup: "Aus Stapel lösen",
+      },
+      roster: {
+        makeFacilitator: "Zur Moderation machen",
+        removeFacilitator: "Moderation entziehen",
+        you: "(du)",
       },
       done: {
         title: "Retro abgeschlossen",

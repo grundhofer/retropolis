@@ -2,14 +2,15 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   generateHexId,
-  REACTION_EMOJI,
+  phaseRevealed,
   type Column,
   type Note,
   type Participant,
   type Phase,
+  type ServerEvent,
 } from "@retropolis/shared";
 import { useConnection } from "../lib/connection.js";
-import { NoteCard } from "./NoteCard.js";
+import { NOTE_DRAG_MIME, NoteCard } from "./NoteCard.js";
 
 export interface BoardColumnsProps {
   columns: Column[];
@@ -19,14 +20,71 @@ export interface BoardColumnsProps {
   phase: Phase;
   editing: Record<string, string>;
   isAdmin: boolean;
+  presenterId: string | null;
 }
 
+type ColumnItem =
+  | { kind: "note"; note: Note }
+  | { kind: "stack"; groupId: string; notes: Note[] };
+
 export function BoardColumns(props: BoardColumnsProps) {
-  const { columns, isAdmin } = props;
+  const { columns, notes, phase, isAdmin } = props;
   const { t } = useTranslation();
   const { mutate } = useConnection();
   const [addingColumn, setAddingColumn] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
+
+  // Curation callbacks live here — building optimistic echoes needs the full
+  // note list, which the cards themselves don't have.
+  function groupNotes(sourceNoteId: string, target: Note) {
+    const source = notes.find((n) => n.id === sourceNoteId);
+    if (!source || source.id === target.id) return;
+    const groupId = target.groupId ?? target.id; // deterministic, matches the server
+    if (source.groupId === groupId) return;
+    const events: ServerEvent[] = [];
+    if (target.groupId === null) {
+      events.push({
+        type: "note.updated",
+        seq: 0,
+        note: { ...target, groupId },
+      });
+    }
+    events.push({
+      type: "note.updated",
+      seq: 0,
+      note: { ...source, groupId, columnId: target.columnId },
+    });
+    mutate(
+      {
+        type: "note.group",
+        opId: generateHexId(),
+        noteId: source.id,
+        targetNoteId: target.id,
+      },
+      events,
+    );
+  }
+
+  function ungroupNote(note: Note) {
+    mutate(
+      { type: "note.ungroup", opId: generateHexId(), noteId: note.id },
+      { type: "note.updated", seq: 0, note: { ...note, groupId: null } },
+    );
+  }
+
+  function moveNote(sourceNoteId: string, columnId: string) {
+    const source = notes.find((n) => n.id === sourceNoteId);
+    if (!source) return;
+    if (source.columnId === columnId && source.groupId === null) return;
+    mutate(
+      { type: "note.move", opId: generateHexId(), noteId: source.id, columnId },
+      {
+        type: "note.updated",
+        seq: 0,
+        note: { ...source, columnId, groupId: null },
+      },
+    );
+  }
 
   function addColumn(event: React.FormEvent) {
     event.preventDefault();
@@ -42,10 +100,21 @@ export function BoardColumns(props: BoardColumnsProps) {
     setAddingColumn(false);
   }
 
+  const allowColumnDrop = phaseRevealed(phase)
+    ? phase !== "done"
+    : phase === "write";
+
   return (
     <div className="flex items-start gap-4 overflow-x-auto pb-4">
       {columns.map((column) => (
-        <BoardColumn key={column.id} column={column} {...props} />
+        <BoardColumn
+          key={column.id}
+          column={column}
+          {...props}
+          onDropNote={groupNotes}
+          onUngroup={ungroupNote}
+          onMoveToColumn={allowColumnDrop ? moveNote : null}
+        />
       ))}
       {isAdmin ? (
         <div className="w-64 shrink-0">
@@ -98,7 +167,16 @@ function BoardColumn({
   phase,
   editing,
   isAdmin,
-}: BoardColumnsProps & { column: Column }) {
+  presenterId,
+  onDropNote,
+  onUngroup,
+  onMoveToColumn,
+}: BoardColumnsProps & {
+  column: Column;
+  onDropNote: (sourceNoteId: string, target: Note) => void;
+  onUngroup: (note: Note) => void;
+  onMoveToColumn: ((sourceNoteId: string, columnId: string) => void) | null;
+}) {
   const { t } = useTranslation();
   const { mutate } = useConnection();
   const [renaming, setRenaming] = useState(false);
@@ -110,6 +188,26 @@ function BoardColumn({
   const columnNotes = notes
     .filter((note) => note.columnId === column.id)
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+
+  // Stacks: notes sharing a groupId render together, at the position of the
+  // stack's first note.
+  // Stacks only render in revealed phases: after a rewind your own grouped
+  // notes would otherwise show as unbreakable ×1 stacks (partners hidden).
+  const stacksVisible = phaseRevealed(phase);
+  const items: ColumnItem[] = [];
+  const seenGroups = new Set<string>();
+  for (const note of columnNotes) {
+    if (note.groupId === null || !stacksVisible) {
+      items.push({ kind: "note", note });
+    } else if (!seenGroups.has(note.groupId)) {
+      seenGroups.add(note.groupId);
+      items.push({
+        kind: "stack",
+        groupId: note.groupId,
+        notes: columnNotes.filter((n) => n.groupId === note.groupId),
+      });
+    }
+  }
 
   // Ghost cards: colleagues writing in this column right now — activity
   // without content (write phase only; from present on the notes are visible).
@@ -154,8 +252,36 @@ function BoardColumn({
     );
   }
 
+  const cardProps = {
+    roster,
+    you,
+    phase,
+    isAdmin,
+    presenterId,
+    onDropNote,
+    onUngroup,
+  };
+
   return (
-    <section className="w-72 shrink-0" aria-label={column.name}>
+    <section
+      className="w-72 shrink-0"
+      aria-label={column.name}
+      onDragOver={(event) => {
+        if (
+          onMoveToColumn !== null &&
+          event.dataTransfer.types.includes(NOTE_DRAG_MIME)
+        ) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        if (onMoveToColumn === null) return;
+        const sourceId = event.dataTransfer.getData(NOTE_DRAG_MIME);
+        if (sourceId === "") return;
+        event.preventDefault();
+        onMoveToColumn(sourceId, column.id);
+      }}
+    >
       <header className="mb-2 flex items-center gap-1.5">
         {renaming ? (
           <form onSubmit={submitRename} className="flex-1">
@@ -213,17 +339,34 @@ function BoardColumn({
       </header>
 
       <div className="flex flex-col gap-2">
-        {columnNotes.map((note, index) => (
-          <NoteCard
-            key={note.id}
-            note={note}
-            roster={roster}
-            you={you}
-            phase={phase}
-            isAdmin={isAdmin}
-            revealIndex={index}
-          />
-        ))}
+        {items.map((item, index) =>
+          item.kind === "note" ? (
+            <NoteCard
+              key={item.note.id}
+              note={item.note}
+              revealIndex={index}
+              {...cardProps}
+            />
+          ) : (
+            <div
+              key={item.groupId}
+              data-testid="note-stack"
+              className="flex flex-col gap-1.5 rounded-2xl border border-accent/30 bg-accent/5 p-1.5"
+            >
+              <span className="px-1.5 text-xs font-semibold text-accent-strong tabular-nums">
+                ×{item.notes.length}
+              </span>
+              {item.notes.map((note) => (
+                <NoteCard
+                  key={note.id}
+                  note={note}
+                  revealIndex={index}
+                  {...cardProps}
+                />
+              ))}
+            </div>
+          ),
+        )}
         {ghosts.map((ghost) => (
           <div
             key={ghost.id}
@@ -294,6 +437,7 @@ function NoteComposer({
           authorId: you.id,
           text: trimmed,
           order,
+          groupId: null,
           reactions: {},
         },
       },
@@ -336,5 +480,3 @@ function NoteComposer({
     </form>
   );
 }
-
-export { REACTION_EMOJI };
