@@ -1,10 +1,10 @@
 # Retropolis — Roadmap
 
-Status: **M0–M5 shipped, v1.1 live** · updated 2026-07-18. Milestones are scoped so each ends in something demoable and E2E-tested; the walking skeleton came first so deploy/test infrastructure never blocked feature work later. Cut lines (MVP / v1.x / v2 / later / never) are defined in `01-product-spec.md` §13.
+Status: **M0–M6 shipped, v1.2 live** · updated 2026-07-19. Milestones are scoped so each ends in something demoable and E2E-tested; the walking skeleton came first so deploy/test infrastructure never blocked feature work later. Cut lines (MVP / v1.x / v2 / later / never) are defined in `01-product-spec.md` §13.
 
-## Shipped — v1.1 (M0–M5)
+## Shipped — v1.2 (M0–M6)
 
-All five build milestones are complete, deployed to production (https://retropolis.sebastiangrundhoefer.workers.dev), and each passed a multi-agent adversarial review. **176 tests** across four layers (83 shared domain · 80 worker-in-workerd · 2 component · 11 multi-context e2e).
+All six build milestones are complete, deployed to production (https://retropolis.sebastiangrundhoefer.workers.dev), and each passed a multi-agent adversarial review. **200 tests** across four layers (86 shared domain · 98 worker-in-workerd · 2 component · 14 multi-context e2e).
 
 - **M0 — Walking skeleton**: monorepo, EU-jurisdiction BoardRoom DO, WebSocket hibernation, live roster, all four test layers + CI.
 - **M1 — Core loop**: 6 templates, private write phase (server-side redaction), ghost cards, ready-check, phase machine, DO-alarm timer, reveal.
@@ -12,6 +12,7 @@ All five build milestones are complete, deployed to production (https://retropol
 - **M3 — Deciding**: blind dot-voting (server-enforced budgets, anonymous meter), top-N crowns, synced discussion queue, action items.
 - **M4 — Delight & shipping**: appreciation/kudos wall (close phase, anonymity, staged reveal), Markdown/CSV/JSON export (author-excluded by default, phase-gated for privacy), GIF support via the KLIPY proxy + per-board toggle, 90-day retention with keep/delete-now, emoji picker, full DE/EN.
 - **M5 — Facilitation rituals**: opening check-in phase (24-question icebreaker bank with facilitator shuffle, all localized DE/EN; dismissible Prime Directive; live-editable working agreements) and a closing anonymous ROTI poll (own score private to the caster's sockets; the average is withheld until three people respond so it can't be differenced back to an individual).
+- **M6 — Fast-follows**: a facilitator-selectable slot-machine picker skin (same server draw, seed-deterministic reels, identical winner on every client); staged/hidden columns (a column and all its notes withheld from members across every path — snapshot, live wire, phase reveal, presence, vote tallies, discussion focus, export, and all reject-code oracles); and board duplication (structure only — columns/config/agreements clone into a fresh board, no notes/participants/votes, staged columns stay staged). Adversarial review fixed 7 defects incl. three existence-oracles and a move-into-hidden stale-card transition.
 
 **Follow-ups before wider launch** (not blocking): register the domain (`getretropolis.de` recommended), enable CI auto-deploy secrets, set `KLIPY_API_KEY` (+ `GIF_HOST_SUFFIX`) to turn on live GIF search, and start the Betriebsrat conversation (see `05-privacy-gdpr.md`).
 
@@ -58,7 +59,7 @@ Goal: a deployed, tested "hello board" proving every architectural mechanism end
 
 ## v1.x (fast follows)
 
-Slot-machine picker skin · icebreaker bank expansion (~100 questions DE/EN; 24 shipped in M5) · staged/hidden columns as general feature · board duplication.
+Shipped in M6: slot-machine picker skin · staged/hidden columns · board duplication. Remaining: icebreaker bank expansion (~100 questions DE/EN; 24 shipped in M5).
 
 ## v2 (needs team spaces)
 
