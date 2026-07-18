@@ -22,7 +22,12 @@ const ben: Participant = {
   online: true,
 };
 
-const column: Column = { id: "c".repeat(32), name: "Went well", order: 0 };
+const column: Column = {
+  id: "c".repeat(32),
+  name: "Went well",
+  order: 0,
+  hidden: false,
+};
 
 function note(id: string, authorId: string, text: string): Note {
   return {
@@ -49,6 +54,7 @@ const sync: ServerEvent = {
     maxPerTarget: null,
     topN: 3,
     gifsEnabled: true,
+    pickerStyle: "wheel",
   },
   phase: "write",
   timer: { endsAt: null, pausedRemainingMs: null },
@@ -400,7 +406,12 @@ describe("voting & discussion", () => {
 describe("columns", () => {
   it("created keeps order; deleted cascades notes", () => {
     let state = afterSync();
-    const second: Column = { id: "d".repeat(32), name: "To improve", order: 1 };
+    const second: Column = {
+      id: "d".repeat(32),
+      name: "To improve",
+      order: 1,
+      hidden: false,
+    };
     state = applyServerEvent(state, {
       type: "column.created",
       seq: 6,

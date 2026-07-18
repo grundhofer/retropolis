@@ -1,26 +1,57 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { EXPORT_FORMATS } from "@retropolis/shared";
+import { useNavigate } from "react-router";
+import {
+  EXPORT_FORMATS,
+  pickerStyles,
+  type PickerStyle,
+} from "@retropolis/shared";
 import { useConnection } from "../lib/connection.js";
+import { duplicateBoard } from "../lib/api.js";
+import { loadAdminToken, saveAdminToken } from "../lib/session.js";
 
-// Export (anyone) + admin board settings: GIF toggle, keep, delete-now. Lives
-// in the board header.
+// Export (anyone) + admin board settings: GIF toggle, picker skin, duplicate,
+// keep, delete-now. Lives in the board header.
 export function BoardMenu({
   boardId,
+  boardName,
   isAdmin,
   gifsEnabled,
+  pickerStyle,
   retentionAt,
 }: {
   boardId: string;
+  boardName: string;
   isAdmin: boolean;
   gifsEnabled: boolean;
+  pickerStyle: PickerStyle;
   retentionAt: number | null;
 }) {
   const { t } = useTranslation();
   const { send } = useConnection();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [includeAuthors, setIncludeAuthors] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+
+  async function duplicate() {
+    if (duplicating) return;
+    const token = loadAdminToken(boardId);
+    if (token === null) return;
+    setDuplicating(true);
+    try {
+      const created = await duplicateBoard(
+        boardId,
+        t("menu.duplicateName", { name: boardName }),
+        token,
+      );
+      saveAdminToken(created.boardId, created.adminToken);
+      void navigate(`/board/${created.boardId}`);
+    } catch {
+      setDuplicating(false); // stay put; the menu remains usable to retry
+    }
+  }
 
   function exportHref(format: string): string {
     const params = new URLSearchParams({ format });
@@ -96,6 +127,38 @@ export function BoardMenu({
                 />
                 {t("menu.gifsEnabled")}
               </label>
+              <div className="mb-2">
+                <p className="mb-1 text-zinc-600">{t("menu.pickerStyle")}</p>
+                <div className="flex gap-1.5" role="group">
+                  {pickerStyles.map((style) => (
+                    <button
+                      key={style}
+                      type="button"
+                      data-testid={`picker-style-${style}`}
+                      aria-pressed={pickerStyle === style}
+                      onClick={() =>
+                        send({ type: "admin.picker.style", style })
+                      }
+                      className={`flex-1 rounded-lg border px-2 py-1 font-medium ${
+                        pickerStyle === style
+                          ? "border-accent bg-accent/10 text-accent-strong"
+                          : "border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                      }`}
+                    >
+                      {t(`menu.picker.${style}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="duplicate-board"
+                onClick={() => void duplicate()}
+                disabled={duplicating}
+                className="mb-2 w-full rounded-lg border border-zinc-200 px-3 py-1 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              >
+                {t("menu.duplicate")}
+              </button>
               <p className="mb-2 text-xs text-zinc-400">
                 {retentionAt === null
                   ? t("menu.retentionKept")

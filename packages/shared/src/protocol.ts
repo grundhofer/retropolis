@@ -5,7 +5,11 @@ import {
   workingAgreementsSchema,
 } from "./domain/icebreakers.js";
 import { phasePlanSchema, phaseSchema } from "./domain/phases.js";
-import { pickerStateSchema, wheelSpinSchema } from "./domain/picker.js";
+import {
+  pickerStateSchema,
+  pickerStyles,
+  wheelSpinSchema,
+} from "./domain/picker.js";
 import { sessionKeySchema } from "./session-key.js";
 
 export const rotiScoreSchema = z.number().int().min(1).max(5);
@@ -33,6 +37,8 @@ export const boardInfoSchema = z.object({
 });
 export type BoardInfo = z.infer<typeof boardInfoSchema>;
 
+export const pickerStyleSchema = z.enum(pickerStyles);
+
 export const boardConfigSchema = z.object({
   anonymous: z.boolean(),
   phasePlan: phasePlanSchema,
@@ -44,6 +50,9 @@ export const boardConfigSchema = z.object({
   topN: z.number().int().min(1).max(10),
   /** GIF search on notes/kudos; per-board opt-out for privacy-strict teams */
   gifsEnabled: z.boolean(),
+  /** who-presents-next picker skin — pure presentation, same server draw.
+   *  Defaulted so boards created before the field parse as the classic wheel. */
+  pickerStyle: pickerStyleSchema.default("wheel"),
 });
 export type BoardConfig = z.infer<typeof boardConfigSchema>;
 
@@ -71,6 +80,9 @@ export const columnSchema = z.object({
   id: hexIdSchema,
   name: z.string(),
   order: z.number(),
+  /** staged column: withheld from members (with its notes) until the
+   *  facilitator reveals it. Defaulted so pre-M6 payloads parse as visible. */
+  hidden: z.boolean().default(false),
 });
 export type Column = z.infer<typeof columnSchema>;
 
@@ -237,6 +249,12 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     opId: hexIdSchema,
     columnId: hexIdSchema,
   }),
+  z.object({
+    type: z.literal("admin.column.setHidden"),
+    opId: hexIdSchema,
+    columnId: hexIdSchema,
+    hidden: z.boolean(),
+  }),
 
   // Voting targets are "votables": ungrouped notes or stacks (group ids).
   z.object({
@@ -279,6 +297,10 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
 
   z.object({ type: z.literal("admin.picker.spin") }),
   z.object({ type: z.literal("admin.picker.skip") }),
+  z.object({
+    type: z.literal("admin.picker.style"),
+    style: pickerStyleSchema,
+  }),
   z.object({
     type: z.literal("admin.picker.exclude"),
     participantId: z.string(),
@@ -527,6 +549,13 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("column.renamed"),
+    seq: z.number(),
+    column: columnSchema,
+  }),
+  // Facilitator-only view of a hide/reveal (carries the new hidden flag);
+  // members instead receive column.deleted (hide) or column.created (reveal).
+  z.object({
+    type: z.literal("column.updated"),
     seq: z.number(),
     column: columnSchema,
   }),
