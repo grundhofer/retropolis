@@ -21,7 +21,7 @@ test("write → reveal core loop with two participants", async ({ browser }) => 
   await expect(anna.getByTestId("roster-item")).toHaveCount(2);
 
   // Admin starts the retro → write phase for everyone.
-  await anna.getByTestId("phase-next").click();
+  await toWrite(anna);
   const annaComposer = anna
     .getByPlaceholder(/write a note|notiz schreiben/i)
     .first();
@@ -100,7 +100,7 @@ test("board is created with localized template columns", async ({ page }) => {
     .click();
   await expect(page).toHaveURL(/\/board\/[0-9a-f]{32}$/);
   await join(page, "Solo");
-  await page.getByTestId("phase-next").click();
+  await toWrite(page);
   await expect(page.getByRole("heading", { name: /^start/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^stop/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^continue/i })).toBeVisible();
@@ -118,7 +118,7 @@ test("a note written while offline is delivered after reconnect", async ({
     .click();
   await expect(page).toHaveURL(/\/board\/[0-9a-f]{32}$/);
   await join(page, "Anna");
-  await page.getByTestId("phase-next").click();
+  await toWrite(page);
 
   const composer = page
     .getByPlaceholder(/write a note|notiz schreiben/i)
@@ -155,4 +155,10 @@ async function join(page: Page, name: string): Promise<void> {
   await page.getByRole("textbox").fill(name);
   await page.getByRole("button", { name: /^(join|beitreten)$/i }).click();
   await expect(page.getByTestId("roster-item").first()).toBeVisible();
+}
+
+// lobby → check-in → write (check-in is enabled by default from M5 on).
+async function toWrite(page: Page): Promise<void> {
+  await page.getByTestId("phase-next").click();
+  await page.getByTestId("phase-next").click();
 }

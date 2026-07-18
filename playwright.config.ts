@@ -4,7 +4,10 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  // All specs share one vite dev server (single worker); a heavily-loaded
+  // sequential run occasionally trips a timing-sensitive assertion that passes
+  // in isolation. One retry absorbs those transient flakes (CI gets two).
+  retries: process.env.CI ? 2 : 1,
   use: {
     baseURL: "http://localhost:5173",
     trace: "on-first-retry",

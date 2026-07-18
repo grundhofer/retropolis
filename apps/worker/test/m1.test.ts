@@ -32,13 +32,18 @@ async function joined(
   return { socket, you: sync.you, sync };
 }
 
+async function toPhase(admin: { socket: TestSocket }, phase: string) {
+  admin.socket.send({ type: "admin.phase.set", phase });
+  await admin.socket.waitFor(
+    (e) => e.type === "phase.changed" && e.phase === phase,
+  );
+}
+
 async function boardInPhase(phase: "write" | "present") {
   const { boardId, adminToken } = await createBoard();
   const admin = await joined(boardId, "Anna", adminToken);
-  admin.socket.send({ type: "admin.phase.set", phase: "write" });
-  await admin.socket.waitFor(
-    (e) => e.type === "phase.changed" && e.phase === "write",
-  );
+  await toPhase(admin, "checkin"); // checkin is enabled by default now
+  await toPhase(admin, "write");
   if (phase === "present") {
     admin.socket.send({ type: "admin.phase.set", phase: "present" });
     await admin.socket.waitFor(

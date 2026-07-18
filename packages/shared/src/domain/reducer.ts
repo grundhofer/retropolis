@@ -53,6 +53,12 @@ export interface ClientBoardState {
   actions: Action[];
   /** appreciation wall — populated only from the close phase on */
   kudos: Kudo[];
+  /** current check-in icebreaker id (null until check-in runs) */
+  icebreakerId: string | null;
+  workingAgreements: string;
+  /** ROTI closing poll: anonymous aggregate + the viewer's own score.
+   *  average is null until enough people respond to stay anonymous. */
+  roti: { count: number; average: number | null; yourScore: number | null };
   /** epoch-ms auto-delete deadline; null once the admin kept the board */
   retentionAt: number | null;
   /** set once the board is deleted (retention or admin) — client shows a
@@ -78,6 +84,9 @@ export const initialBoardState: ClientBoardState = {
   discussFocusId: null,
   actions: [],
   kudos: [],
+  icebreakerId: null,
+  workingAgreements: "",
+  roti: { count: 0, average: null, yourScore: null },
   retentionAt: null,
   deleted: false,
   lastSeq: 0,
@@ -110,6 +119,9 @@ export function applyServerEvent(
         discussFocusId: event.discussFocusId,
         actions: event.actions,
         kudos: event.kudos,
+        icebreakerId: event.icebreakerId,
+        workingAgreements: event.workingAgreements,
+        roti: event.roti,
         retentionAt: event.retentionAt,
         deleted: false,
         lastSeq: event.seq,
@@ -203,6 +215,33 @@ export function applyServerEvent(
         ...state,
         retentionAt: event.retentionAt,
         lastSeq: seq(state, event.seq),
+      };
+
+    case "checkin.shuffled":
+      return {
+        ...state,
+        icebreakerId: event.icebreakerId,
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "agreements.changed":
+      return {
+        ...state,
+        workingAgreements: event.text,
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "roti.aggregate":
+      return {
+        ...state,
+        roti: { ...state.roti, count: event.count, average: event.average },
+        lastSeq: seq(state, event.seq),
+      };
+
+    case "roti.you":
+      return {
+        ...state,
+        roti: { ...state.roti, yourScore: event.yourScore },
       };
 
     case "board.deleted":

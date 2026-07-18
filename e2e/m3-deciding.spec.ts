@@ -22,7 +22,8 @@ test("blind voting, crowns, discussion queue and action items", async ({
   await ben.goto(boardUrl);
   await join(ben, "Ben");
 
-  // Write two notes, reveal them.
+  // Write two notes, reveal them (skip check-in first).
+  await anna.getByTestId("phase-next").click();
   await anna.getByTestId("phase-next").click();
   const annaComposer = anna
     .getByPlaceholder(/write a note|notiz schreiben/i)

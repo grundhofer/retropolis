@@ -69,6 +69,9 @@ const sync: ServerEvent = {
   discussFocusId: null,
   actions: [],
   kudos: [],
+  icebreakerId: null,
+  workingAgreements: "Vegas rule",
+  roti: { count: 0, average: 0, yourScore: null },
   retentionAt: null,
 };
 
@@ -514,5 +517,45 @@ describe("appreciation & retention (M4)", () => {
     expect(state.notes.find((n) => n.id === gifNote.id)?.gifUrl).toBe(
       "https://cdn.example/x.gif",
     );
+  });
+});
+
+describe("check-in & ROTI (M5)", () => {
+  it("checkin.shuffled and agreements.changed update state", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "checkin.shuffled",
+      seq: 6,
+      icebreakerId: "weather",
+    });
+    expect(state.icebreakerId).toBe("weather");
+    state = applyServerEvent(state, {
+      type: "agreements.changed",
+      seq: 7,
+      text: "Be kind",
+    });
+    expect(state.workingAgreements).toBe("Be kind");
+  });
+
+  it("roti.aggregate updates the anonymous average; roti.you tracks own score", () => {
+    let state = afterSync();
+    state = applyServerEvent(state, {
+      type: "roti.aggregate",
+      seq: 6,
+      count: 3,
+      average: 4.5,
+    });
+    expect(state.roti.count).toBe(3);
+    expect(state.roti.average).toBe(4.5);
+    expect(state.roti.yourScore).toBeNull();
+    state = applyServerEvent(state, { type: "roti.you", yourScore: 5 });
+    expect(state.roti.yourScore).toBe(5);
+    state = applyServerEvent(state, {
+      type: "roti.aggregate",
+      seq: 7,
+      count: 4,
+      average: 4.75,
+    });
+    expect(state.roti.yourScore).toBe(5); // aggregate must not clobber own score
   });
 });

@@ -33,13 +33,26 @@ import {
   WHEEL_START_DELAY_MS,
   wheelSpinSchema,
   type BoardExport,
+  type IcebreakerId,
   type Kudo,
   type KudoCardType,
+  ICEBREAKER_IDS,
+  pickIcebreaker,
 } from "@retropolis/shared";
 import { generateSecret, randomIndex, safeEqual } from "./ids.js";
 
 // Boards auto-delete after this window unless the facilitator keeps them.
 export const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+// ROTI stays anonymous only if the average summarises enough people: with one
+// respondent the average IS that person's score, and with two a co-voter can
+// subtract their own to recover the other's. At three the average leaves at
+// least two unknowns for any single observer, so we withhold it below that.
+// (A determined observer diffing consecutive aggregates as the count ticks up
+// could still infer a marginal voter's score; real-room concurrency and the
+// one-decimal rounding blur that, and it's an acceptable residual for a team
+// retro — the blatant one- and two-voter leaks are what this closes.)
+export const ROTI_MIN_ANONYMOUS = 3;
 
 interface KudoRow {
   id: string;
@@ -80,6 +93,7 @@ export interface BoardCreation {
   name: string;
   adminToken: string;
   columns: Array<{ id: string; name: string; order: number }>;
+  workingAgreements: string;
 }
 
 const MAX_FRAME_CHARS = 8192;
@@ -156,6 +170,10 @@ export class BoardRoom extends DurableObject<Env> {
         gif_url TEXT,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS roti (
+        participant_id TEXT PRIMARY KEY,
+        score INTEGER NOT NULL
+      );
     `);
     this.migrate();
     // Heartbeats are answered by the runtime without waking a hibernated DO.
@@ -201,13 +219,14 @@ export class BoardRoom extends DurableObject<Env> {
       `INSERT INTO board_meta (key, value) VALUES
          ('id', ?), ('name', ?), ('adminToken', ?), ('createdAt', ?), ('seq', '0'),
          ('phase', 'lobby'), ('anonymous', '0'), ('phasePlan', ?),
-         ('gifsEnabled', '1'), ('retentionAt', ?)`,
+         ('gifsEnabled', '1'), ('retentionAt', ?), ('workingAgreements', ?)`,
       creation.boardId,
       creation.name,
       creation.adminToken,
       String(now),
       JSON.stringify(DEFAULT_PHASE_PLAN),
       String(retentionAt),
+      creation.workingAgreements,
     );
     for (const column of creation.columns) {
       this.sql.exec(
@@ -382,6 +401,15 @@ export class BoardRoom extends DurableObject<Env> {
       case "admin.board.delete":
         void this.handleBoardDelete(ws, participant);
         return;
+      case "admin.checkin.shuffle":
+        this.handleCheckinShuffle(ws, participant);
+        return;
+      case "admin.agreements.set":
+        this.handleAgreementsSet(ws, participant, command);
+        return;
+      case "roti.set":
+        this.handleRotiSet(ws, participant, command);
+        return;
     }
   }
 
@@ -452,6 +480,7 @@ export class BoardRoom extends DurableObject<Env> {
       "votes",
       "actions",
       "kudos",
+      "roti",
     ]) {
       this.sql.exec(`DELETE FROM ${table}`);
     }
@@ -1006,6 +1035,12 @@ export class BoardRoom extends DurableObject<Env> {
       for (const kudo of this.allKudos()) {
         this.broadcastAll({ type: "kudo.created", seq: this.nextSeq(), kudo });
       }
+    }
+
+    // First entry into check-in picks an icebreaker (persists across rewinds
+    // so the room doesn't get a new question every time it re-enters).
+    if (target === "checkin" && this.getMeta("icebreakerId") === null) {
+      this.shuffleIcebreaker();
     }
   }
 
@@ -2001,6 +2036,18 @@ export class BoardRoom extends DurableObject<Env> {
     }
   }
 
+  /** The caster's own ROTI score to EVERY socket of that participant — a
+   *  second tab (or projector view) must not show a stale selection. Mirrors
+   *  sendProgressTo; the individual score never reaches any other participant. */
+  private sendRotiYouTo(participantId: string, score: number): void {
+    const frame = JSON.stringify({ type: "roti.you", yourScore: score });
+    for (const ws of this.ctx.getWebSockets()) {
+      if (readAttachment(ws)?.participantId === participantId) {
+        this.trySend(ws, frame);
+      }
+    }
+  }
+
   /** Every joined participant gets their own fresh votes — after a structural
    *  change (delete, vote migration) that may have rewritten vote rows. */
   private broadcastAllProgress(): void {
@@ -2313,6 +2360,115 @@ export class BoardRoom extends DurableObject<Env> {
     await this.destroyBoard();
   }
 
+  // Picks a fresh icebreaker (never repeating the current one) and broadcasts.
+  private shuffleIcebreaker(): void {
+    const current = this.getMeta("icebreakerId");
+    const icebreakerId = pickIcebreaker(
+      randomIndex(ICEBREAKER_IDS.length),
+      current,
+    );
+    this.setMeta("icebreakerId", icebreakerId);
+    this.broadcastAll({
+      type: "checkin.shuffled",
+      seq: this.nextSeq(),
+      icebreakerId,
+    });
+  }
+
+  private handleCheckinShuffle(
+    ws: WebSocket,
+    participant: ParticipantRow,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator shuffles the check-in",
+      );
+      return;
+    }
+    if (this.phase() !== "checkin") {
+      this.reject(ws, undefined, "PHASE_LOCKED", "The check-in is not open");
+      return;
+    }
+    this.shuffleIcebreaker();
+  }
+
+  private handleAgreementsSet(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.agreements.set" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator edits the agreements",
+      );
+      return;
+    }
+    this.setMeta("workingAgreements", cmd.text);
+    this.broadcastAll({
+      type: "agreements.changed",
+      seq: this.nextSeq(),
+      text: cmd.text,
+    });
+  }
+
+  private handleRotiSet(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "roti.set" }>,
+  ): void {
+    // ROTI runs in the closing phase (alongside the appreciation wall).
+    if (this.phase() !== "close") {
+      this.reject(ws, undefined, "PHASE_LOCKED", "The ROTI poll is closed");
+      return;
+    }
+    this.sql.exec(
+      `INSERT INTO roti (participant_id, score) VALUES (?, ?)
+       ON CONFLICT(participant_id) DO UPDATE SET score = excluded.score`,
+      participant.id,
+      cmd.score,
+    );
+    // Anonymous: only the running aggregate is broadcast; the caster learns
+    // their own score via a private frame to EVERY one of their sockets (a
+    // second tab / projector must not show a stale selection), never fanning
+    // the individual score to anyone else.
+    this.sendRotiYouTo(participant.id, cmd.score);
+    const agg = this.rotiAggregate();
+    this.broadcastAll({
+      type: "roti.aggregate",
+      seq: this.nextSeq(),
+      count: agg.count,
+      average: agg.average,
+    });
+  }
+
+  private rotiAggregate(): { count: number; average: number | null } {
+    const row = this.sql
+      .exec("SELECT COUNT(*) AS n, COALESCE(AVG(score), 0) AS avg FROM roti")
+      .toArray()[0];
+    const count = Number(row?.n ?? 0);
+    // Withhold the average until enough people respond to keep it anonymous
+    // (see ROTI_MIN_ANONYMOUS). Below the threshold clients see only the count.
+    // Round to one decimal for a stable, readable average.
+    const average =
+      count < ROTI_MIN_ANONYMOUS
+        ? null
+        : Math.round(Number(row?.avg ?? 0) * 10) / 10;
+    return { count, average };
+  }
+
+  private myRotiScore(participantId: string): number | null {
+    const row = this.sql
+      .exec("SELECT score FROM roti WHERE participant_id = ?", participantId)
+      .toArray()[0];
+    return row === undefined ? null : Number(row.score);
+  }
+
   private kudoRowById(id: string): KudoRow | null {
     return (
       (this.sql.exec("SELECT * FROM kudos WHERE id = ?", id).toArray()[0] as
@@ -2504,6 +2660,13 @@ export class BoardRoom extends DurableObject<Env> {
       actions: this.actions(),
       // Staged reveal: the appreciation wall only appears from the close phase.
       kudos: this.kudosForPhase(phase, participant.id),
+      icebreakerId:
+        (this.getMeta("icebreakerId") as IcebreakerId | null) ?? null,
+      workingAgreements: this.getMeta("workingAgreements") ?? "",
+      roti: {
+        ...this.rotiAggregate(),
+        yourScore: this.myRotiScore(participant.id),
+      },
       retentionAt: this.retentionAt(),
       // The snapshot passes through the SAME visibility filter as live
       // events — the snapshot is the classic leak path.

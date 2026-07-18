@@ -43,6 +43,9 @@ app.post("/api/boards", async (c) => {
     name: parsed.data.name,
     adminToken,
     columns,
+    // Empty = the client shows a localized default set of agreements until the
+    // facilitator edits them (avoids baking a locale into stored data).
+    workingAgreements: "",
   });
   return c.json({ boardId, adminToken });
 });

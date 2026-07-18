@@ -51,18 +51,18 @@ async function joined(
   return { socket, you: sync.you, sync };
 }
 
+async function toPhase(socket: TestSocket, phase: string) {
+  socket.send({ type: "admin.phase.set", phase });
+  await socket.waitFor((e) => e.type === "phase.changed" && e.phase === phase);
+}
+
 async function presentingBoard() {
   const { boardId, adminToken } = await createBoard();
   const admin = await joined(boardId, "Anna", adminToken);
   const ben = await joined(boardId, "Ben");
-  admin.socket.send({ type: "admin.phase.set", phase: "write" });
-  await admin.socket.waitFor(
-    (e) => e.type === "phase.changed" && e.phase === "write",
-  );
-  admin.socket.send({ type: "admin.phase.set", phase: "present" });
-  await admin.socket.waitFor(
-    (e) => e.type === "phase.changed" && e.phase === "present",
-  );
+  await toPhase(admin.socket, "checkin"); // checkin is enabled by default
+  await toPhase(admin.socket, "write");
+  await toPhase(admin.socket, "present");
   return { boardId, adminToken, admin, ben };
 }
 
@@ -253,8 +253,8 @@ describe("grouping & moving", () => {
   it("grouping is locked before the reveal", async () => {
     const { boardId, adminToken } = await createBoard();
     const admin = await joined(boardId, "Anna", adminToken);
-    admin.socket.send({ type: "admin.phase.set", phase: "write" });
-    await admin.socket.waitFor((e) => e.type === "phase.changed");
+    await toPhase(admin.socket, "checkin");
+    await toPhase(admin.socket, "write");
     const columnId = admin.sync.columns[0]?.id;
     if (!columnId) throw new Error("setup");
     const a = await createNote(admin.socket, columnId, "one");
@@ -352,10 +352,10 @@ describe("facilitator handoff", () => {
     );
     expect(promoted.type).toBe("roster.updated");
 
-    // Now Ben can act as facilitator (e.g. advance the phase)…
-    ben.socket.send({ type: "admin.phase.set", phase: "write" });
+    // Now Ben can act as facilitator (e.g. advance the phase from lobby)…
+    ben.socket.send({ type: "admin.phase.set", phase: "checkin" });
     await ben.socket.waitFor(
-      (e) => e.type === "phase.changed" && e.phase === "write",
+      (e) => e.type === "phase.changed" && e.phase === "checkin",
     );
 
     // …and Anna can step down since Ben remains.
