@@ -22,7 +22,8 @@ test("wheel rotation, presenter focus, grouping and handoff", async ({
   await join(ben, "Ben");
   await expect(anna.getByTestId("roster-item")).toHaveCount(2);
 
-  // Write phase: each writes a duplicate-ish point.
+  // Write phase: each writes a duplicate-ish point (skip check-in first).
+  await anna.getByTestId("phase-next").click();
   await anna.getByTestId("phase-next").click();
   const annaComposer = anna
     .getByPlaceholder(/write a note|notiz schreiben/i)

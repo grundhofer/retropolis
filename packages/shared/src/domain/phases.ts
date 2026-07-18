@@ -25,11 +25,10 @@ export const phasePlanSchema = z.object({
 });
 export type PhasePlan = z.infer<typeof phasePlanSchema>;
 
-// From M4 on, new boards run the full flow ending on appreciation (the close
-// phase holds the kudos wall). Check-in arrives with a later milestone.
-// Existing boards keep the plan they were created with.
+// From M5 on, new boards run the complete flow: warm up with a check-in,
+// end on appreciation. Existing boards keep the plan they were created with.
 export const DEFAULT_PHASE_PLAN: PhasePlan = {
-  checkin: false,
+  checkin: true,
   vote: true,
   discuss: true,
   close: true,

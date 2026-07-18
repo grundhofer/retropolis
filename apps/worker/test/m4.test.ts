@@ -37,9 +37,13 @@ async function joined(
 
 async function advance(
   admin: { socket: TestSocket },
-  phases: Array<"write" | "present" | "vote" | "discuss" | "close">,
+  phases: ReadonlyArray<
+    "checkin" | "write" | "present" | "vote" | "discuss" | "close"
+  >,
 ): Promise<void> {
-  for (const phase of phases) {
+  const full =
+    phases[0] === "write" ? (["checkin", ...phases] as const) : phases;
+  for (const phase of full) {
     admin.socket.send({ type: "admin.phase.set", phase });
     await admin.socket.waitFor(
       (e) => e.type === "phase.changed" && e.phase === phase,
@@ -148,8 +152,14 @@ describe("board export", () => {
     const admin = await joined(boardId, "Anna", adminToken);
     const columnId = admin.sync.columns[0]?.id;
     if (!columnId) throw new Error("setup");
+    admin.socket.send({ type: "admin.phase.set", phase: "checkin" });
+    await admin.socket.waitFor(
+      (e) => e.type === "phase.changed" && e.phase === "checkin",
+    );
     admin.socket.send({ type: "admin.phase.set", phase: "write" });
-    await admin.socket.waitFor((e) => e.type === "phase.changed");
+    await admin.socket.waitFor(
+      (e) => e.type === "phase.changed" && e.phase === "write",
+    );
     const noteId = newId();
     admin.socket.send({
       type: "note.create",

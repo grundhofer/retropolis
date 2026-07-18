@@ -20,6 +20,7 @@ describe("enabledPhases", () => {
   it("core loop only for the default plan", () => {
     expect(enabledPhases(DEFAULT_PHASE_PLAN)).toEqual([
       "lobby",
+      "checkin",
       "write",
       "present",
       "vote",
@@ -45,7 +46,8 @@ describe("enabledPhases", () => {
 
 describe("nextPhase / previousPhase", () => {
   it("walks the enabled sequence, skipping disabled phases", () => {
-    expect(nextPhase("lobby", DEFAULT_PHASE_PLAN)).toBe("write");
+    expect(nextPhase("lobby", DEFAULT_PHASE_PLAN)).toBe("checkin");
+    expect(nextPhase("checkin", DEFAULT_PHASE_PLAN)).toBe("write");
     expect(nextPhase("write", DEFAULT_PHASE_PLAN)).toBe("present");
     expect(nextPhase("present", DEFAULT_PHASE_PLAN)).toBe("vote");
     expect(nextPhase("discuss", DEFAULT_PHASE_PLAN)).toBe("close");
@@ -63,7 +65,7 @@ describe("nextPhase / previousPhase", () => {
 
 describe("canTransition", () => {
   it("allows exactly one step forward", () => {
-    expect(canTransition("lobby", "write", DEFAULT_PHASE_PLAN)).toBe(true);
+    expect(canTransition("lobby", "checkin", DEFAULT_PHASE_PLAN)).toBe(true);
     expect(canTransition("write", "present", DEFAULT_PHASE_PLAN)).toBe(true);
     expect(canTransition("lobby", "present", DEFAULT_PHASE_PLAN)).toBe(false); // no skipping
   });
@@ -79,7 +81,13 @@ describe("canTransition", () => {
   });
 
   it("disabled phases are unreachable", () => {
-    expect(canTransition("present", "checkin", DEFAULT_PHASE_PLAN)).toBe(false);
+    const CORE_ONLY: PhasePlan = {
+      checkin: false,
+      vote: false,
+      discuss: false,
+      close: false,
+    };
+    expect(canTransition("write", "checkin", CORE_ONLY)).toBe(false);
     expect(canTransition("lobby", "checkin", FULL_PLAN)).toBe(true);
   });
 });

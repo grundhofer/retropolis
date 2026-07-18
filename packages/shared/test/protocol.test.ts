@@ -146,6 +146,9 @@ describe("parseServerEvent", () => {
         actions: [],
         kudos: [],
         retentionAt: null,
+        icebreakerId: null,
+        workingAgreements: "",
+        roti: { count: 0, average: 0, yourScore: null },
       }),
     );
     expect(event?.type).toBe("sync");

@@ -6,8 +6,10 @@ import { ActionsPanel } from "../components/ActionsPanel.js";
 import { AvatarRow } from "../components/AvatarRow.js";
 import { BoardColumns } from "../components/BoardColumns.js";
 import { BoardMenu } from "../components/BoardMenu.js";
+import { CheckinPanel } from "../components/CheckinPanel.js";
 import { DiscussBar } from "../components/DiscussBar.js";
 import { KudosWall } from "../components/KudosWall.js";
+import { RotiPoll } from "../components/RotiPoll.js";
 import { LanguageToggle } from "../components/LanguageToggle.js";
 import { PhaseStepper } from "../components/PhaseStepper.js";
 import { PickerPanel } from "../components/PickerPanel.js";
@@ -348,15 +350,24 @@ function Room({
               </div>
               <Roster participants={state.roster} youId={you.id} />
             </div>
-          ) : state.phase === "close" ? (
-            <KudosWall
-              kudos={state.kudos}
-              roster={state.roster}
-              you={you}
+          ) : state.phase === "checkin" ? (
+            <CheckinPanel
+              icebreakerId={state.icebreakerId}
+              workingAgreements={state.workingAgreements}
               isAdmin={isAdmin}
-              gifsEnabled={gifsEnabled}
-              readOnly={false}
             />
+          ) : state.phase === "close" ? (
+            <div className="flex flex-col gap-8">
+              <KudosWall
+                kudos={state.kudos}
+                roster={state.roster}
+                you={you}
+                isAdmin={isAdmin}
+                gifsEnabled={gifsEnabled}
+                readOnly={false}
+              />
+              <RotiPoll />
+            </div>
           ) : state.phase === "done" ? (
             <div className="mx-auto flex max-w-4xl flex-col items-center gap-8 py-12">
               <div className="text-center">

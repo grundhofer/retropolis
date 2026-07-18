@@ -1,16 +1,17 @@
 # Retropolis — Roadmap
 
-Status: **M0–M4 shipped, v1.0 live** · updated 2026-07-18. Milestones are scoped so each ends in something demoable and E2E-tested; the walking skeleton came first so deploy/test infrastructure never blocked feature work later. Cut lines (MVP / v1.x / v2 / later / never) are defined in `01-product-spec.md` §13.
+Status: **M0–M5 shipped, v1.1 live** · updated 2026-07-18. Milestones are scoped so each ends in something demoable and E2E-tested; the walking skeleton came first so deploy/test infrastructure never blocked feature work later. Cut lines (MVP / v1.x / v2 / later / never) are defined in `01-product-spec.md` §13.
 
-## Shipped — v1.0 (M0–M4)
+## Shipped — v1.1 (M0–M5)
 
-All four build milestones are complete, deployed to production (https://retropolis.sebastiangrundhoefer.workers.dev), and each passed a multi-agent adversarial review. **164 tests** across four layers (78 shared domain · 74 worker-in-workerd · 2 component · 10 multi-context e2e).
+All five build milestones are complete, deployed to production (https://retropolis.sebastiangrundhoefer.workers.dev), and each passed a multi-agent adversarial review. **176 tests** across four layers (83 shared domain · 80 worker-in-workerd · 2 component · 11 multi-context e2e).
 
 - **M0 — Walking skeleton**: monorepo, EU-jurisdiction BoardRoom DO, WebSocket hibernation, live roster, all four test layers + CI.
 - **M1 — Core loop**: 6 templates, private write phase (server-side redaction), ghost cards, ready-check, phase machine, DO-alarm timer, reveal.
 - **M2 — Presenting**: wheel-of-fortune picker with rotation tracking, synced presenter focus, drag-grouping with vote-preserving stacks, facilitator handoff.
 - **M3 — Deciding**: blind dot-voting (server-enforced budgets, anonymous meter), top-N crowns, synced discussion queue, action items.
 - **M4 — Delight & shipping**: appreciation/kudos wall (close phase, anonymity, staged reveal), Markdown/CSV/JSON export (author-excluded by default, phase-gated for privacy), GIF support via the KLIPY proxy + per-board toggle, 90-day retention with keep/delete-now, emoji picker, full DE/EN.
+- **M5 — Facilitation rituals**: opening check-in phase (24-question icebreaker bank with facilitator shuffle, all localized DE/EN; dismissible Prime Directive; live-editable working agreements) and a closing anonymous ROTI poll (own score private to the caster's sockets; the average is withheld until three people respond so it can't be differenced back to an individual).
 
 **Follow-ups before wider launch** (not blocking): register the domain (`getretropolis.de` recommended), enable CI auto-deploy secrets, set `KLIPY_API_KEY` (+ `GIF_HOST_SUFFIX`) to turn on live GIF search, and start the Betriebsrat conversation (see `05-privacy-gdpr.md`).
 
@@ -57,11 +58,11 @@ Goal: a deployed, tested "hello board" proving every architectural mechanism end
 
 ## v1.x (fast follows)
 
-Slot-machine picker skin · full icebreaker bank (~100 questions DE/EN) + weather check-in · staged/hidden columns as general feature · working-agreements card · board duplication.
+Slot-machine picker skin · icebreaker bank expansion (~100 questions DE/EN; 24 shipped in M5) · staged/hidden columns as general feature · board duplication.
 
 ## v2 (needs team spaces)
 
-`TeamRoom` DO (named team → board list, action-item carry-over auto-injected as retro phase 2, kudos history) · ROTI poll + trend · Lean Coffee + Team Health Check board types · lotto-ball machine · pixel cursors (group/discuss phases only, 3–4 Hz) · PDF export · multi-round voting · parking lot · safety check.
+`TeamRoom` DO (named team → board list, action-item carry-over auto-injected as retro phase 2, kudos history) · ROTI trend across sprints (the per-retro poll shipped in M5) · Lean Coffee + Team Health Check board types · lotto-ball machine · pixel cursors (group/discuss phases only, 3–4 Hz) · PDF export · multi-round voting · parking lot · safety check.
 
 ## Later / research
 

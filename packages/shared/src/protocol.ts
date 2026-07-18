@@ -1,8 +1,14 @@
 import { z } from "zod";
 import { hexIdSchema } from "./ids.js";
+import {
+  icebreakerIdSchema,
+  workingAgreementsSchema,
+} from "./domain/icebreakers.js";
 import { phasePlanSchema, phaseSchema } from "./domain/phases.js";
 import { pickerStateSchema, wheelSpinSchema } from "./domain/picker.js";
 import { sessionKeySchema } from "./session-key.js";
+
+export const rotiScoreSchema = z.number().int().min(1).max(5);
 
 // ---------------------------------------------------------------------------
 // Entities
@@ -308,6 +314,15 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   // Retention: keep the board (clear the 90-day auto-delete) or delete it now.
   z.object({ type: z.literal("admin.board.keep") }),
   z.object({ type: z.literal("admin.board.delete") }),
+
+  // Check-in warm-up.
+  z.object({ type: z.literal("admin.checkin.shuffle") }),
+  z.object({
+    type: z.literal("admin.agreements.set"),
+    text: workingAgreementsSchema,
+  }),
+  // ROTI closing poll — anonymous 1-5 "was this worth your time?".
+  z.object({ type: z.literal("roti.set"), score: rotiScoreSchema }),
 ]);
 export type ClientCommand = z.infer<typeof clientCommandSchema>;
 
@@ -363,6 +378,16 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     kudos: z.array(kudoSchema),
     /** epoch-ms when the board auto-deletes; null once the admin kept it */
     retentionAt: z.number().nullable(),
+    /** current check-in icebreaker (null until check-in has run) */
+    icebreakerId: icebreakerIdSchema.nullable(),
+    workingAgreements: z.string(),
+    /** ROTI closing poll: anonymous aggregate + the recipient's own score.
+     *  average is null until enough people respond to keep it anonymous. */
+    roti: z.object({
+      count: z.number(),
+      average: z.number().nullable(),
+      yourScore: z.number().nullable(),
+    }),
   }),
 
   z.object({ type: z.literal("ack"), opId: hexIdSchema, seq: z.number() }),
@@ -526,6 +551,26 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     seq: z.number(),
     retentionAt: z.number().nullable(),
   }),
+  z.object({
+    type: z.literal("checkin.shuffled"),
+    seq: z.number(),
+    icebreakerId: icebreakerIdSchema,
+  }),
+  z.object({
+    type: z.literal("agreements.changed"),
+    seq: z.number(),
+    text: z.string(),
+  }),
+  // Anonymous ROTI aggregate broadcast to everyone; individual scores never
+  // leave the server (the caster learns only their own via roti.you). average
+  // is null until the response count clears the anonymity threshold.
+  z.object({
+    type: z.literal("roti.aggregate"),
+    seq: z.number(),
+    count: z.number(),
+    average: z.number().nullable(),
+  }),
+  z.object({ type: z.literal("roti.you"), yourScore: rotiScoreSchema }),
   // The board was deleted (retention expiry or admin delete-now) — the client
   // shows a closing screen; the DO is about to be garbage-collected.
   z.object({ type: z.literal("board.deleted") }),
