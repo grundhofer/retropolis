@@ -213,6 +213,32 @@ describe("picker rotation", () => {
   });
 });
 
+describe("picker style (skin)", () => {
+  it("defaults to the wheel and lets the facilitator switch to slots for everyone", async () => {
+    const { boardId, admin, ben } = await presentingBoard();
+    expect(admin.sync.config.pickerStyle).toBe("wheel"); // new boards
+
+    admin.socket.send({ type: "admin.picker.style", style: "slots" });
+    const changed = await ben.socket.waitFor(
+      (e) => e.type === "config.changed",
+    );
+    if (changed.type !== "config.changed") throw new Error("unreachable");
+    expect(changed.config.pickerStyle).toBe("slots");
+
+    // A fresh joiner's sync carries the chosen skin (persisted).
+    const cara = await joined(boardId, "Cara");
+    expect(cara.sync.config.pickerStyle).toBe("slots");
+  });
+
+  it("only the facilitator changes the skin", async () => {
+    const { ben } = await presentingBoard();
+    ben.socket.send({ type: "admin.picker.style", style: "slots" });
+    const rejected = await ben.socket.waitFor((e) => e.type === "reject");
+    if (rejected.type !== "reject") throw new Error("unreachable");
+    expect(rejected.code).toBe("NOT_ADMIN");
+  });
+});
+
 describe("grouping & moving", () => {
   it("dragging a note onto another stacks them; ungrouping the pair dissolves the group", async () => {
     const { admin, ben } = await presentingBoard();

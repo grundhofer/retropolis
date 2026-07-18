@@ -290,8 +290,10 @@ function Room({
             />
             <BoardMenu
               boardId={boardId}
+              boardName={state.board?.name ?? board.name}
               isAdmin={isAdmin}
               gifsEnabled={gifsEnabled}
+              pickerStyle={config?.pickerStyle ?? "wheel"}
               retentionAt={state.retentionAt}
             />
             <LanguageToggle />

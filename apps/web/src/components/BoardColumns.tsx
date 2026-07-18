@@ -123,7 +123,11 @@ export function BoardColumns(props: BoardColumnsProps) {
     const order = (columns[columns.length - 1]?.order ?? -1) + 1;
     mutate(
       { type: "admin.column.create", opId: generateHexId(), columnId, name },
-      { type: "column.created", seq: 0, column: { id: columnId, name, order } },
+      {
+        type: "column.created",
+        seq: 0,
+        column: { id: columnId, name, order, hidden: false },
+      },
     );
     setNewColumnName("");
     setAddingColumn(false);
@@ -285,6 +289,19 @@ function BoardColumn({
     );
   }
 
+  function toggleHidden() {
+    const hidden = !column.hidden;
+    mutate(
+      {
+        type: "admin.column.setHidden",
+        opId: generateHexId(),
+        columnId: column.id,
+        hidden,
+      },
+      { type: "column.updated", seq: 0, column: { ...column, hidden } },
+    );
+  }
+
   const cardProps = {
     roster,
     you,
@@ -297,7 +314,7 @@ function BoardColumn({
 
   return (
     <section
-      className="w-72 shrink-0"
+      className={`w-72 shrink-0 ${column.hidden ? "opacity-60" : ""}`}
       aria-label={column.name}
       onDragOver={(event) => {
         if (
@@ -330,6 +347,14 @@ function BoardColumn({
         ) : (
           <h2 className="flex-1 truncate text-sm font-semibold tracking-wide text-zinc-600 uppercase">
             {column.name}
+            {column.hidden ? (
+              <span
+                data-testid="column-hidden-badge"
+                className="ml-1.5 rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 lowercase"
+              >
+                {t("column.hidden")}
+              </span>
+            ) : null}
             <span className="ml-1.5 font-normal text-zinc-400 tabular-nums">
               {columnNotes.length}
             </span>
@@ -337,6 +362,16 @@ function BoardColumn({
         )}
         {isAdmin && !renaming ? (
           <>
+            <button
+              type="button"
+              data-testid="column-hide-toggle"
+              aria-label={column.hidden ? t("column.reveal") : t("column.hide")}
+              aria-pressed={column.hidden}
+              onClick={toggleHidden}
+              className="rounded px-1 text-sm text-zinc-400 hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              {column.hidden ? "🙈" : "👁"}
+            </button>
             <button
               type="button"
               aria-label={t("column.rename")}

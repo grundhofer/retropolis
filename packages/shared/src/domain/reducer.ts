@@ -349,7 +349,8 @@ export function applyServerEvent(
       return { ...state, timer: IDLE_TIMER, lastSeq: seq(state, event.seq) };
 
     case "column.created":
-    case "column.renamed": {
+    case "column.renamed":
+    case "column.updated": {
       const columns = upsertById(state.columns, event.column).sort(
         (a, b) => a.order - b.order,
       );

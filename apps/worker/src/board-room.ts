@@ -92,8 +92,16 @@ export interface BoardCreation {
   boardId: string;
   name: string;
   adminToken: string;
-  columns: Array<{ id: string; name: string; order: number }>;
+  columns: Array<{
+    id: string;
+    name: string;
+    order: number;
+    hidden?: boolean;
+  }>;
   workingAgreements: string;
+  /** seeded when duplicating an existing board — structure only. Absent for a
+   *  fresh board, which falls back to the built-in defaults. */
+  config?: BoardConfig;
 }
 
 const MAX_FRAME_CHARS = 8192;
@@ -132,7 +140,8 @@ export class BoardRoom extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS columns (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        ord INTEGER NOT NULL
+        ord INTEGER NOT NULL,
+        hidden INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS notes (
         id TEXT PRIMARY KEY,
@@ -208,32 +217,55 @@ export class BoardRoom extends DurableObject<Env> {
     if (!noteColumns.includes("gif_url")) {
       this.sql.exec("ALTER TABLE notes ADD COLUMN gif_url TEXT");
     }
+    const columnColumns = this.sql
+      .exec("PRAGMA table_info(columns)")
+      .toArray()
+      .map((row) => String(row.name));
+    if (!columnColumns.includes("hidden")) {
+      this.sql.exec(
+        "ALTER TABLE columns ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+      );
+    }
   }
 
   // Called once by the Worker when a board is created (RPC).
   async initialize(creation: BoardCreation): Promise<void> {
     if (this.getMeta("id") !== null) return; // idempotent: replays must not rotate the admin token
     const now = Date.now();
-    const retentionAt = now + RETENTION_MS;
+    const retentionAt = now + RETENTION_MS; // always a FRESH window — a copy is a new object
+    // Structure carried over on duplication; otherwise the built-in defaults.
+    // Identity/lifecycle fields (id, adminToken, createdAt, seq, phase,
+    // retentionAt) are never seeded from a source — always fresh here.
+    const config = creation.config;
+    const maxPerTarget = config?.maxPerTarget;
     this.sql.exec(
       `INSERT INTO board_meta (key, value) VALUES
          ('id', ?), ('name', ?), ('adminToken', ?), ('createdAt', ?), ('seq', '0'),
-         ('phase', 'lobby'), ('anonymous', '0'), ('phasePlan', ?),
-         ('gifsEnabled', '1'), ('retentionAt', ?), ('workingAgreements', ?)`,
+         ('phase', 'lobby'), ('anonymous', ?), ('phasePlan', ?),
+         ('gifsEnabled', ?), ('pickerStyle', ?),
+         ('votesPerPerson', ?), ('topN', ?), ('maxPerTarget', ?),
+         ('retentionAt', ?), ('workingAgreements', ?)`,
       creation.boardId,
       creation.name,
       creation.adminToken,
       String(now),
-      JSON.stringify(DEFAULT_PHASE_PLAN),
+      config?.anonymous ? "1" : "0",
+      JSON.stringify(config?.phasePlan ?? DEFAULT_PHASE_PLAN),
+      config === undefined || config.gifsEnabled ? "1" : "0",
+      config?.pickerStyle ?? "wheel",
+      String(config?.votesPerPerson ?? DEFAULT_VOTE_CONFIG.votesPerPerson),
+      String(config?.topN ?? DEFAULT_VOTE_CONFIG.topN),
+      maxPerTarget == null ? "" : String(maxPerTarget),
       String(retentionAt),
       creation.workingAgreements,
     );
     for (const column of creation.columns) {
       this.sql.exec(
-        "INSERT INTO columns (id, name, ord) VALUES (?, ?, ?)",
+        "INSERT INTO columns (id, name, ord, hidden) VALUES (?, ?, ?, ?)",
         column.id,
         column.name,
         column.order,
+        column.hidden ? 1 : 0,
       );
     }
     // Auto-delete after the retention window (GDPR / decided). The DO's single
@@ -244,6 +276,43 @@ export class BoardRoom extends DurableObject<Env> {
   // RPC: board metadata for the join page; null if never created.
   async info(): Promise<BoardInfo | null> {
     return this.getMeta("id") === null ? null : this.boardInfo();
+  }
+
+  // RPC: structure-only snapshot for duplication — column names+order, board
+  // config, and the working-agreements text. Deliberately returns NO
+  // participant, note, vote, kudo, roti, action, or picker data: "structure,
+  // never content" is a property of THIS API surface, not caller discipline, so
+  // no note body or participant can ever leak into a copy — even across regions,
+  // since only these fields (never content-table rows) cross the RPC boundary.
+  // Gated on the source admin token; returns null if the board does not exist
+  // OR the token is wrong (no existence/auth oracle beyond the id capability).
+  async duplicationSnapshot(adminToken: string): Promise<{
+    name: string;
+    columns: Array<{ name: string; order: number; hidden: boolean }>;
+    config: BoardConfig;
+    workingAgreements: string;
+  } | null> {
+    const expected = this.getMeta("adminToken");
+    if (
+      this.getMeta("id") === null ||
+      expected === null ||
+      !safeEqual(adminToken, expected)
+    ) {
+      return null;
+    }
+    return {
+      name: this.getMeta("name") ?? "",
+      // Carry the staged (hidden) flag through so a staged column stays staged
+      // in the copy — otherwise its (possibly sensitive) name would be exposed
+      // to the copy's members.
+      columns: this.columns().map((c) => ({
+        name: c.name,
+        order: c.order,
+        hidden: c.hidden,
+      })),
+      config: this.config(),
+      workingAgreements: this.getMeta("workingAgreements") ?? "",
+    };
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -348,6 +417,7 @@ export class BoardRoom extends DurableObject<Env> {
       case "admin.column.create":
       case "admin.column.rename":
       case "admin.column.delete":
+      case "admin.column.setHidden":
         this.handleColumn(ws, participant, command);
         return;
       case "note.group":
@@ -368,6 +438,9 @@ export class BoardRoom extends DurableObject<Env> {
       case "admin.picker.exclude":
       case "admin.picker.include":
         this.handlePickerPool(ws, participant, command);
+        return;
+      case "admin.picker.style":
+        this.handlePickerStyleSet(ws, participant, command);
         return;
       case "admin.role.set":
         this.handleRoleSet(ws, participant, command);
@@ -646,7 +719,22 @@ export class BoardRoom extends DurableObject<Env> {
     participant: ParticipantRow,
     columnId: string | null,
   ): void {
-    if (columnId !== null && this.columnById(columnId) === null) return; // stale ghost, ignore
+    if (columnId !== null) {
+      const column = this.columnById(columnId);
+      if (column === null) return; // stale ghost, ignore
+      if (column.hidden) {
+        // A hidden column's id must not reach members. Only facilitators (who
+        // can see the column) exchange editing presence inside it; a member
+        // referencing it at all is ignored.
+        if (participant.role !== "facilitator") return;
+        this.broadcastToFacilitators({
+          type: "presence.editing",
+          participantId: participant.id,
+          columnId,
+        });
+        return;
+      }
+    }
     // Ephemeral, never persisted. NOTE: when the anonymity toggle becomes
     // reachable (per-board setting UI), ghosts on anonymous boards must stop
     // carrying the participant id.
@@ -689,7 +777,9 @@ export class BoardRoom extends DurableObject<Env> {
       );
       return;
     }
-    if (this.columnById(cmd.columnId) === null) {
+    // A hidden column is invisible to members — reject exactly like a missing
+    // one (no existence oracle). Facilitators may write into hidden columns.
+    if (this.columnFor(cmd.columnId, participant) === null) {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Column does not exist");
       return;
     }
@@ -703,9 +793,10 @@ export class BoardRoom extends DurableObject<Env> {
       // Colliding with a note the caller cannot see must not read differently
       // from any other invalid id — reject codes are an existence oracle.
       const visible = noteVisibleTo(
-        { authorId: existing.author_id },
+        { authorId: existing.author_id, columnId: existing.column_id },
         participant.id,
         this.phase(),
+        this.hiddenColumnsFor(participant),
       );
       this.reject(
         ws,
@@ -757,7 +848,12 @@ export class BoardRoom extends DurableObject<Env> {
     // notes (authors always see their own, so they are unaffected).
     if (
       row === null ||
-      !noteVisibleTo({ authorId: row.author_id }, participant.id, this.phase())
+      !noteVisibleTo(
+        { authorId: row.author_id, columnId: row.column_id },
+        participant.id,
+        this.phase(),
+        this.hiddenColumnsFor(participant),
+      )
     ) {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Note does not exist");
       return;
@@ -822,7 +918,12 @@ export class BoardRoom extends DurableObject<Env> {
     // NO deletion) — anything else is an existence oracle for hidden notes.
     if (
       row === null ||
-      !noteVisibleTo({ authorId: row.author_id }, participant.id, this.phase())
+      !noteVisibleTo(
+        { authorId: row.author_id, columnId: row.column_id },
+        participant.id,
+        this.phase(),
+        this.hiddenColumnsFor(participant),
+      )
     ) {
       this.ack(ws, cmd.opId);
       return;
@@ -866,10 +967,17 @@ export class BoardRoom extends DurableObject<Env> {
     }
     if (note !== null) {
       // Only recipients who could SEE the note learn about its deletion —
-      // sending the id of a hidden note would leak its existence.
+      // sending the id of a note hidden from them (foreign pre-reveal, or in a
+      // staged column) would leak its existence.
       const phase = this.phase();
+      const hidden = this.hiddenColumnIds();
       this.broadcastEach((recipientId) =>
-        noteVisibleTo(note, recipientId, phase)
+        noteVisibleTo(
+          note,
+          recipientId,
+          phase,
+          this.hiddenSetFor(recipientId, hidden),
+        )
           ? { type: "note.deleted", seq, noteId: cmd.noteId }
           : null,
       );
@@ -891,7 +999,19 @@ export class BoardRoom extends DurableObject<Env> {
       );
       return;
     }
-    if (this.noteRowById(cmd.noteId) === null) {
+    const reactRow = this.noteRowById(cmd.noteId);
+    // A note the caller cannot see — foreign before the reveal, or in a column
+    // hidden from a member — answers exactly like a nonexistent one (no
+    // existence oracle), and a member can never react onto a staged note.
+    if (
+      reactRow === null ||
+      !noteVisibleTo(
+        { authorId: reactRow.author_id, columnId: reactRow.column_id },
+        participant.id,
+        phase,
+        this.hiddenColumnsFor(participant),
+      )
+    ) {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Note does not exist");
       return;
     }
@@ -1014,13 +1134,21 @@ export class BoardRoom extends DurableObject<Env> {
 
     // Crossing into the revealed world: everyone receives the notes that were
     // hidden from them. (Rewinds need no event — clients drop foreign notes.)
+    // A staged (hidden) column stays withheld from members even across the
+    // reveal — its notes reach them only when the facilitator reveals it.
     if (!phaseRevealed(current) && phaseRevealed(target)) {
       const notes = this.allNotes();
       const anonymous = this.anonymous();
+      const hidden = this.hiddenColumnIds();
       const seq = this.nextSeq();
       this.broadcastEach((recipientId) => {
+        const hiddenFor = this.hiddenSetFor(recipientId, hidden);
         const newlyVisible = notes
-          .filter((n) => n.authorId !== recipientId)
+          .filter(
+            (n) =>
+              n.authorId !== recipientId &&
+              (hiddenFor === null || !hiddenFor.has(n.columnId)),
+          )
           .map((n) => redactNoteForViewer(n, recipientId, anonymous));
         return newlyVisible.length > 0
           ? { type: "notes.revealed", seq, notes: newlyVisible }
@@ -1119,7 +1247,9 @@ export class BoardRoom extends DurableObject<Env> {
     participant: ParticipantRow,
     cmd: Extract<
       ClientCommand,
-      { type: `admin.column.${"create" | "rename" | "delete"}` }
+      {
+        type: `admin.column.${"create" | "rename" | "delete" | "setHidden"}`;
+      }
     >,
   ): void {
     if (participant.role !== "facilitator") {
@@ -1152,7 +1282,8 @@ export class BoardRoom extends DurableObject<Env> {
         if (column === null) return;
         const seq = this.nextSeq();
         this.ack(ws, cmd.opId, seq);
-        this.broadcastAll({ type: "column.created", seq, column });
+        // New columns are visible → everyone sees it (broadcastColumnEvent).
+        this.broadcastColumnEvent({ type: "column.created", seq, column });
         return;
       }
       case "admin.column.rename": {
@@ -1169,11 +1300,13 @@ export class BoardRoom extends DurableObject<Env> {
         if (column === null) return;
         const seq = this.nextSeq();
         this.ack(ws, cmd.opId, seq);
-        this.broadcastAll({ type: "column.renamed", seq, column });
+        // A hidden column's new name must not reach members.
+        this.broadcastColumnEvent({ type: "column.renamed", seq, column });
         return;
       }
       case "admin.column.delete": {
-        if (this.columnById(cmd.columnId) === null) {
+        const column = this.columnById(cmd.columnId);
+        if (column === null) {
           this.ack(ws, cmd.opId); // idempotent
           return;
         }
@@ -1191,14 +1324,111 @@ export class BoardRoom extends DurableObject<Env> {
         this.reconcileAfterVoteMutation();
         const seq = this.nextSeq();
         this.ack(ws, cmd.opId, seq);
-        this.broadcastAll({
+        const deleted: ServerEvent = {
           type: "column.deleted",
           seq,
           columnId: cmd.columnId,
-        });
+        };
+        // Members never had a hidden column — don't even leak its id.
+        if (column.hidden) {
+          this.broadcastToFacilitators(deleted);
+        } else {
+          this.broadcastAll(deleted);
+        }
+        return;
+      }
+      case "admin.column.setHidden": {
+        this.handleColumnSetHidden(ws, cmd);
         return;
       }
     }
+  }
+
+  // Hide/reveal a staged column. The hidden flag itself, the column's
+  // name/existence, and its notes must never reach a member — so delivery is
+  // per-recipient: facilitators get column.updated (with the flag); members get
+  // column.deleted on hide (their reducer drops the column AND its notes) or
+  // column.created + their now-visible notes on reveal. The snapshot (buildSync)
+  // enforces the same rule, so a reconnect can't leak either.
+  private handleColumnSetHidden(
+    ws: WebSocket,
+    cmd: Extract<ClientCommand, { type: "admin.column.setHidden" }>,
+  ): void {
+    const column = this.columnById(cmd.columnId);
+    if (column === null) {
+      this.reject(ws, cmd.opId, "NOT_FOUND", "Column does not exist");
+      return;
+    }
+    if (column.hidden === cmd.hidden) {
+      this.ack(ws, cmd.opId); // idempotent no-op
+      return;
+    }
+    this.sql.exec(
+      "UPDATE columns SET hidden = ? WHERE id = ?",
+      cmd.hidden ? 1 : 0,
+      cmd.columnId,
+    );
+    const updated: Column = { ...column, hidden: cmd.hidden };
+    const seq = this.nextSeq();
+    this.ack(ws, cmd.opId, seq);
+    const phase = this.phase();
+    const anonymous = this.anonymous();
+    this.broadcastEach((recipientId) => {
+      if (this.participantById(recipientId)?.role === "facilitator") {
+        return { type: "column.updated", seq, column: updated };
+      }
+      return cmd.hidden
+        ? { type: "column.deleted", seq, columnId: cmd.columnId }
+        : { type: "column.created", seq, column: updated };
+    });
+    // On reveal, follow the column with the notes now visible to each member
+    // (facilitators already had them). Author/phase/anonymity rules still apply.
+    if (!cmd.hidden) {
+      const columnNotes = this.allNotes().filter(
+        (n) => n.columnId === cmd.columnId,
+      );
+      const notesSeq = this.nextSeq();
+      this.broadcastEach((recipientId) => {
+        if (this.participantById(recipientId)?.role === "facilitator") {
+          return null;
+        }
+        const visible = visibleNotesFor(
+          columnNotes,
+          recipientId,
+          phase,
+          anonymous,
+        );
+        return visible.length > 0
+          ? { type: "notes.revealed", seq: notesSeq, notes: visible }
+          : null;
+      });
+    }
+    // Hiding removes the column's notes from the votable set (reveal restores
+    // them); recompute any revealed tallies/crowns so they never reference a
+    // hidden note.
+    this.reconcileAfterVoteMutation();
+  }
+
+  // A column-bearing event goes to everyone when the column is visible, but only
+  // to facilitators when it is hidden — members must not learn a hidden column's
+  // name or existence.
+  private broadcastColumnEvent(
+    event: Extract<
+      ServerEvent,
+      { type: "column.created" | "column.renamed" | "column.updated" }
+    >,
+  ): void {
+    if (!event.column.hidden) {
+      this.broadcastAll(event);
+      return;
+    }
+    this.broadcastToFacilitators(event);
+  }
+
+  private broadcastToFacilitators(event: ServerEvent): void {
+    this.broadcastEach((recipientId) =>
+      this.participantById(recipientId)?.role === "facilitator" ? event : null,
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -1207,7 +1437,7 @@ export class BoardRoom extends DurableObject<Env> {
 
   private handleNoteGroup(
     ws: WebSocket,
-    _participant: ParticipantRow,
+    participant: ParticipantRow,
     cmd: Extract<ClientCommand, { type: "note.group" }>,
   ): void {
     const phase = this.phase();
@@ -1228,7 +1458,15 @@ export class BoardRoom extends DurableObject<Env> {
     }
     const note = this.noteRowById(cmd.noteId);
     const target = this.noteRowById(cmd.targetNoteId);
-    if (note === null || target === null) {
+    // A note in a column hidden from this member is invisible — treat it (and
+    // any attempt to group into it) like a nonexistent note (existence oracle).
+    const hidden = this.hiddenColumnsFor(participant);
+    if (
+      note === null ||
+      target === null ||
+      (hidden !== null &&
+        (hidden.has(note.column_id) || hidden.has(target.column_id)))
+    ) {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Note does not exist");
       return;
     }
@@ -1280,17 +1518,15 @@ export class BoardRoom extends DurableObject<Env> {
     for (const id of changed) {
       const updated = this.noteById(id);
       if (updated === null) continue;
-      const seq = this.nextSeq();
-      this.broadcastNoteEvent(
-        (n) => ({ type: "note.updated", seq, note: n }),
-        updated,
-      );
+      // Grouping onto a target in a staged column moves the note there —
+      // reorg-aware delivery drops it from members who can no longer see it.
+      this.broadcastNoteReorg(updated);
     }
   }
 
   private handleNoteUngroup(
     ws: WebSocket,
-    _participant: ParticipantRow,
+    participant: ParticipantRow,
     cmd: Extract<ClientCommand, { type: "note.ungroup" }>,
   ): void {
     const phase = this.phase();
@@ -1306,7 +1542,18 @@ export class BoardRoom extends DurableObject<Env> {
       return;
     }
     const note = this.noteRowById(cmd.noteId);
-    if (note === null) {
+    // A note in a column hidden from a member is invisible — answer like a
+    // nonexistent one (existence oracle) so a member cannot probe or mutate a
+    // staged stack, mirroring note.move / note.group.
+    if (
+      note === null ||
+      !noteVisibleTo(
+        { authorId: note.author_id, columnId: note.column_id },
+        participant.id,
+        phase,
+        this.hiddenColumnsFor(participant),
+      )
+    ) {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Note does not exist");
       return;
     }
@@ -1347,10 +1594,16 @@ export class BoardRoom extends DurableObject<Env> {
       return;
     }
     const note = this.noteRowById(cmd.noteId);
-    // Invisible notes answer like nonexistent ones (existence oracle).
+    // Invisible notes (foreign, or in a column hidden from a member) answer like
+    // nonexistent ones (existence oracle).
     if (
       note === null ||
-      !noteVisibleTo({ authorId: note.author_id }, participant.id, phase)
+      !noteVisibleTo(
+        { authorId: note.author_id, columnId: note.column_id },
+        participant.id,
+        phase,
+        this.hiddenColumnsFor(participant),
+      )
     ) {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Note does not exist");
       return;
@@ -1366,7 +1619,9 @@ export class BoardRoom extends DurableObject<Env> {
       );
       return;
     }
-    if (this.columnById(cmd.columnId) === null) {
+    // A member cannot move a note INTO a column hidden from them, and no one can
+    // move into a nonexistent column.
+    if (this.columnFor(cmd.columnId, participant) === null) {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Column does not exist");
       return;
     }
@@ -1398,11 +1653,9 @@ export class BoardRoom extends DurableObject<Env> {
     for (const id of changed) {
       const updated = this.noteById(id);
       if (updated === null) continue;
-      const seq = this.nextSeq();
-      this.broadcastNoteEvent(
-        (n) => ({ type: "note.updated", seq, note: n }),
-        updated,
-      );
+      // A move can land a note in a staged column — reorg-aware delivery drops
+      // it from members who can no longer see it.
+      this.broadcastNoteReorg(updated);
     }
   }
 
@@ -1698,6 +1951,16 @@ export class BoardRoom extends DurableObject<Env> {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Nothing to vote on");
       return;
     }
+    // A member cannot vote on a note in a column hidden from them — it's
+    // invisible, so answer like a nonexistent target (hidden notes are excluded
+    // from tallies anyway; this stops a modified client spending budget there).
+    if (participant.role !== "facilitator") {
+      const columnId = this.noteRowById(cmd.targetId)?.column_id ?? null;
+      if (columnId !== null && this.hiddenColumnIds().has(columnId)) {
+        this.reject(ws, cmd.opId, "NOT_FOUND", "Nothing to vote on");
+        return;
+      }
+    }
     const config = this.config();
     const current = Number(
       this.sql
@@ -1837,6 +2100,14 @@ export class BoardRoom extends DurableObject<Env> {
     if (cmd.targetId !== null) {
       const kind = this.votableKind(cmd.targetId);
       if (kind !== "note" && kind !== "group") {
+        this.reject(ws, undefined, "NOT_FOUND", "Nothing to focus");
+        return;
+      }
+      // A hidden-column note must never become the shared discussion focus —
+      // its id would broadcast to members (and ride in every sync), leaking a
+      // staged note. Same exclusion talliesAndTop applies to crowns.
+      const columnId = this.noteRowById(cmd.targetId)?.column_id ?? null;
+      if (columnId !== null && this.hiddenColumnIds().has(columnId)) {
         this.reject(ws, undefined, "NOT_FOUND", "Nothing to focus");
         return;
       }
@@ -2148,9 +2419,14 @@ export class BoardRoom extends DurableObject<Env> {
     tallies: Record<string, number>;
     topTargetIds: string[];
   } {
+    // Notes in hidden (staged) columns are excluded from the votable set:
+    // revealed tallies/crowns are broadcast to EVERYONE, so a hidden note's id
+    // or count must never surface there. Reveal restores them to the tally.
     const votable = new Set<string>();
     for (const row of this.sql
-      .exec("SELECT id, group_id FROM notes")
+      .exec(
+        "SELECT n.id, n.group_id FROM notes n JOIN columns c ON c.id = n.column_id WHERE c.hidden = 0",
+      )
       .toArray()) {
       if (row.group_id === null) votable.add(String(row.id));
       else votable.add(String(row.group_id));
@@ -2315,6 +2591,29 @@ export class BoardRoom extends DurableObject<Env> {
       return;
     }
     this.setMeta("gifsEnabled", cmd.enabled ? "1" : "0");
+    this.broadcastAll({
+      type: "config.changed",
+      seq: this.nextSeq(),
+      config: this.config(),
+    });
+  }
+
+  private handlePickerStyleSet(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.picker.style" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator changes settings",
+      );
+      return;
+    }
+    // Pure presentation — the draw is unchanged; only the skin clients render.
+    this.setMeta("pickerStyle", cmd.style);
     this.broadcastAll({
       type: "config.changed",
       seq: this.nextSeq(),
@@ -2552,38 +2851,42 @@ export class BoardRoom extends DurableObject<Env> {
       }
     }
 
-    const columns = this.columns().map((column) => {
-      // Every note is exported (stack members included — no content dropped);
-      // stacks are kept adjacent, and only the votable (ungrouped note or
-      // stack anchor) carries the tally so votes aren't double-counted.
-      const notes = (notesByColumn.get(column.id) ?? [])
-        .slice()
-        .sort(
-          (a, b) =>
-            (a.groupId ?? a.id).localeCompare(b.groupId ?? b.id) ||
-            a.order - b.order ||
-            a.id.localeCompare(b.id),
-        );
-      return {
-        name: column.name,
-        notes: notes.map((n) => {
-          const isVotable = n.groupId === null || n.groupId === n.id;
-          const votableId = n.groupId ?? n.id;
-          const rank = isVotable
-            ? revealedVotes.topTargetIds.indexOf(votableId)
-            : -1;
-          return {
-            text: n.text,
-            gifUrl: n.gifUrl,
-            authorName: nameOf(n.authorId),
-            votes: isVotable
-              ? (revealedVotes.tallies[votableId] ?? null)
-              : null,
-            crownedRank: rank >= 0 ? rank + 1 : null,
-          };
-        }),
-      };
-    });
+    // Hidden (staged) columns are omitted from the export — it has no viewer to
+    // scope to and may be shared, so a hidden column's contents must not surface.
+    const columns = this.columns()
+      .filter((column) => !column.hidden)
+      .map((column) => {
+        // Every note is exported (stack members included — no content dropped);
+        // stacks are kept adjacent, and only the votable (ungrouped note or
+        // stack anchor) carries the tally so votes aren't double-counted.
+        const notes = (notesByColumn.get(column.id) ?? [])
+          .slice()
+          .sort(
+            (a, b) =>
+              (a.groupId ?? a.id).localeCompare(b.groupId ?? b.id) ||
+              a.order - b.order ||
+              a.id.localeCompare(b.id),
+          );
+        return {
+          name: column.name,
+          notes: notes.map((n) => {
+            const isVotable = n.groupId === null || n.groupId === n.id;
+            const votableId = n.groupId ?? n.id;
+            const rank = isVotable
+              ? revealedVotes.topTargetIds.indexOf(votableId)
+              : -1;
+            return {
+              text: n.text,
+              gifUrl: n.gifUrl,
+              authorName: nameOf(n.authorId),
+              votes: isVotable
+                ? (revealedVotes.tallies[votableId] ?? null)
+                : null,
+              crownedRank: rank >= 0 ? rank + 1 : null,
+            };
+          }),
+        };
+      });
 
     return {
       boardName: this.getMeta("name") ?? "",
@@ -2638,6 +2941,9 @@ export class BoardRoom extends DurableObject<Env> {
     sessionKey: string,
   ): ServerEvent {
     const phase = this.phase();
+    // null for facilitators (they see every column); the hidden-column set for
+    // members — gates BOTH the columns array and the notes below.
+    const hiddenColumns = this.hiddenColumnsFor(participant);
     return {
       type: "sync",
       seq: this.currentSeq(),
@@ -2652,7 +2958,11 @@ export class BoardRoom extends DurableObject<Env> {
         .exec("SELECT id FROM participants WHERE ready = 1")
         .toArray()
         .map((row) => String(row.id)),
-      columns: this.columns(),
+      // Members never receive hidden (staged) columns; facilitators see all.
+      columns:
+        hiddenColumns === null
+          ? this.columns()
+          : this.columns().filter((c) => !c.hidden),
       picker: this.picker(),
       lastSpin: this.activeSpinForSync(),
       votes: this.votesForSync(participant.id, phase),
@@ -2669,12 +2979,13 @@ export class BoardRoom extends DurableObject<Env> {
       },
       retentionAt: this.retentionAt(),
       // The snapshot passes through the SAME visibility filter as live
-      // events — the snapshot is the classic leak path.
+      // events — including the hidden-column gate — the classic leak path.
       notes: visibleNotesFor(
         this.allNotes(),
         participant.id,
         phase,
         this.anonymous(),
+        hiddenColumns,
       ),
     };
   }
@@ -2687,11 +2998,63 @@ export class BoardRoom extends DurableObject<Env> {
   ): void {
     const phase = this.phase();
     const anonymous = this.anonymous();
+    const hidden = this.hiddenColumnIds();
     this.broadcastEach((recipientId) =>
-      noteVisibleTo(note, recipientId, phase)
+      noteVisibleTo(
+        note,
+        recipientId,
+        phase,
+        this.hiddenSetFor(recipientId, hidden),
+      )
         ? makeEvent(redactNoteForViewer(note, recipientId, anonymous))
         : null,
     );
+  }
+
+  // Fan-out after a move/group that may change a note's COLUMN — and therefore
+  // whether a member may see it. Recipients who can see it now get an upserting
+  // note.updated; a member who can no longer see it because the note landed in
+  // a staged (hidden) column gets a note.deleted, so no stale card lingers in
+  // its old position (the note-level analogue of column hide/reveal). Ordinary
+  // pre-reveal privacy is unaffected: when the note is NOT in a hidden column,
+  // non-viewers get nothing, exactly like broadcastNoteEvent.
+  private broadcastNoteReorg(note: Note): void {
+    const phase = this.phase();
+    const anonymous = this.anonymous();
+    const hidden = this.hiddenColumnIds();
+    const landedHidden = hidden.has(note.columnId);
+    const seq = this.nextSeq();
+    this.broadcastEach((recipientId) => {
+      if (
+        noteVisibleTo(
+          note,
+          recipientId,
+          phase,
+          this.hiddenSetFor(recipientId, hidden),
+        )
+      ) {
+        return {
+          type: "note.updated",
+          seq,
+          note: redactNoteForViewer(note, recipientId, anonymous),
+        };
+      }
+      return landedHidden
+        ? { type: "note.deleted", seq, noteId: note.id }
+        : null;
+    });
+  }
+
+  // The hidden-column gate for a specific recipient: null (sees all) for a
+  // facilitator, otherwise the precomputed set. Pass the set in so a per-note
+  // fan-out doesn't re-query the hidden columns for every recipient.
+  private hiddenSetFor(
+    recipientId: string,
+    hidden: ReadonlySet<string>,
+  ): ReadonlySet<string> | null {
+    return this.participantById(recipientId)?.role === "facilitator"
+      ? null
+      : hidden;
   }
 
   // Per-recipient fan-out: the mapper decides, per participant, which event
@@ -2776,20 +3139,46 @@ export class BoardRoom extends DurableObject<Env> {
     const row = this.sql
       .exec("SELECT * FROM columns WHERE id = ?", id)
       .toArray()[0];
-    return row === undefined
-      ? null
-      : { id: String(row.id), name: String(row.name), order: Number(row.ord) };
+    return row === undefined ? null : rowToColumn(row);
   }
 
   private columns(): Column[] {
     return this.sql
       .exec("SELECT * FROM columns ORDER BY ord")
       .toArray()
-      .map((row) => ({
-        id: String(row.id),
-        name: String(row.name),
-        order: Number(row.ord),
-      }));
+      .map(rowToColumn);
+  }
+
+  // Every currently-hidden column id. Used to withhold hidden columns and their
+  // notes from members on both the live wire and the sync snapshot.
+  private hiddenColumnIds(): Set<string> {
+    return new Set(
+      this.sql
+        .exec("SELECT id FROM columns WHERE hidden = 1")
+        .toArray()
+        .map((row) => String(row.id)),
+    );
+  }
+
+  // The hidden-column set as this viewer experiences it: facilitators see every
+  // column (null = no gate), members have hidden columns withheld.
+  private hiddenColumnsFor(
+    participant: ParticipantRow,
+  ): ReadonlySet<string> | null {
+    return participant.role === "facilitator" ? null : this.hiddenColumnIds();
+  }
+
+  // The column as this participant may act on it. A hidden column is invisible
+  // to members — treated exactly like a non-existent one (NOT_FOUND, no
+  // existence oracle). Facilitators may target hidden columns.
+  private columnFor(
+    columnId: string,
+    participant: ParticipantRow,
+  ): Column | null {
+    const column = this.columnById(columnId);
+    if (column === null) return null;
+    if (column.hidden && participant.role !== "facilitator") return null;
+    return column;
   }
 
   private noteRowById(id: string): NoteRow | null {
@@ -2876,6 +3265,8 @@ export class BoardRoom extends DurableObject<Env> {
       topN: Number(this.getMeta("topN") ?? DEFAULT_VOTE_CONFIG.topN),
       // Default true for boards created before the toggle existed.
       gifsEnabled: this.getMeta("gifsEnabled") !== "0",
+      // Default to the classic wheel for boards created before the skin field.
+      pickerStyle: this.getMeta("pickerStyle") === "slots" ? "slots" : "wheel",
     };
   }
 
@@ -2954,6 +3345,15 @@ function rowToParticipant(row: ParticipantRow): Participant {
     color: row.color,
     role: row.role as ParticipantRole,
     online: row.online === 1,
+  };
+}
+
+function rowToColumn(row: Record<string, SqlStorageValue>): Column {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    order: Number(row.ord),
+    hidden: Number(row.hidden) === 1,
   };
 }
 

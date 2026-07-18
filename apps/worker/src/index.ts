@@ -22,6 +22,12 @@ const createBoardRequestSchema = z.object({
   locale: boardLocaleSchema.default("en"),
 });
 
+const duplicateBoardRequestSchema = z.object({
+  // localized "Copy of …" from the client; falls back to the source name
+  name: boardNameSchema.optional(),
+  adminToken: z.string(),
+});
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.post("/api/boards", async (c) => {
@@ -46,6 +52,48 @@ app.post("/api/boards", async (c) => {
     // Empty = the client shows a localized default set of agreements until the
     // facilitator edits them (avoids baking a locale into stored data).
     workingAgreements: "",
+  });
+  return c.json({ boardId, adminToken });
+});
+
+// Duplicate a board's STRUCTURE (columns, config, working agreements) into a
+// fresh board — no notes, votes, participants, kudos, or roti carry over.
+// Gated on the source board's admin token (facilitator-only).
+app.post("/api/boards/:id/duplicate", async (c) => {
+  const sourceId = c.req.param("id");
+  if (!isSecretShaped(sourceId)) {
+    return c.json({ error: "BOARD_NOT_FOUND" }, 404);
+  }
+  const body: unknown = await c.req.json().catch(() => null);
+  const parsed = duplicateBoardRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "INVALID_REQUEST" }, 400);
+  }
+  const snapshot = await boardStub(c.env, sourceId).duplicationSnapshot(
+    parsed.data.adminToken,
+  );
+  // null = board missing OR wrong admin token — 404 either way (the id is the
+  // capability; we don't confirm existence to a non-facilitator).
+  if (snapshot === null) {
+    return c.json({ error: "BOARD_NOT_FOUND" }, 404);
+  }
+  const boardId = generateSecret();
+  const adminToken = generateSecret();
+  // Fresh column ids — the source ids never cross into the copy. Staged
+  // (hidden) columns stay staged so their names are not exposed to the copy.
+  const columns = snapshot.columns.map((column, index) => ({
+    id: generateSecret(),
+    name: column.name,
+    order: index,
+    hidden: column.hidden,
+  }));
+  await boardStub(c.env, boardId).initialize({
+    boardId,
+    name: parsed.data.name ?? snapshot.name,
+    adminToken,
+    columns,
+    workingAgreements: snapshot.workingAgreements,
+    config: snapshot.config,
   });
   return c.json({ boardId, adminToken });
 });

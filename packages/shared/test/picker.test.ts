@@ -4,6 +4,8 @@ import {
   mulberry32,
   pickerFinished,
   pickerKnows,
+  SLOT_REELS,
+  slotReel,
   wheelTargetRotation,
 } from "../src/domain/picker.js";
 
@@ -64,6 +66,51 @@ describe("wheelTargetRotation", () => {
   it("degrades safely for unknown winners or empty pools", () => {
     expect(wheelTargetRotation([], "anna", 1)).toBe(0);
     expect(wheelTargetRotation(pool, "nobody", 1)).toBe(0);
+  });
+});
+
+describe("slotReel", () => {
+  const pool = ["anna", "ben", "cara", "dev"];
+
+  it("every reel parks on the winner (jackpot) — deterministically from the seed", () => {
+    for (const [winner, seed] of [
+      ["anna", 1],
+      ["ben", 99],
+      ["cara", 12345],
+      ["dev", 987654],
+    ] as const) {
+      for (let reel = 0; reel < SLOT_REELS; reel++) {
+        const a = slotReel(pool, winner, seed, reel);
+        const b = slotReel(pool, winner, seed, reel);
+        expect(a).toEqual(b); // same inputs → same strip on every client
+        expect(a.strip[a.stopIndex]).toBe(winner);
+        // the stop leaves following symbols below it for the peek row
+        expect(a.stopIndex).toBeLessThan(a.strip.length - 1);
+      }
+    }
+  });
+
+  it("reels vary in filler order (not identical strips) for most seeds", () => {
+    // Deterministic but robust: over a fixed range of seeds, the great majority
+    // produce at least two distinct reel strips (visual variety), while every
+    // reel always still lands on the winner.
+    let varied = 0;
+    for (let seed = 0; seed < 50; seed++) {
+      const strips = Array.from({ length: SLOT_REELS }, (_, i) => {
+        const r = slotReel(pool, "cara", seed, i);
+        expect(r.strip[r.stopIndex]).toBe("cara");
+        return r.strip.join(",");
+      });
+      if (new Set(strips).size > 1) varied++;
+    }
+    expect(varied).toBeGreaterThan(40);
+  });
+
+  it("degrades safely for a single-person pool and unknown winners", () => {
+    const solo = slotReel(["anna"], "anna", 1, 0);
+    expect(solo.strip[solo.stopIndex]).toBe("anna");
+    expect(slotReel([], "anna", 1, 0)).toEqual({ strip: [], stopIndex: 0 });
+    expect(slotReel(pool, "nobody", 1, 0)).toEqual({ strip: [], stopIndex: 0 });
   });
 });
 

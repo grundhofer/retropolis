@@ -92,3 +92,38 @@ export function wheelTargetRotation(
   const jitter = (random() - 0.5) * segment * 0.7;
   return fullTurns * 360 + (360 - winnerCenter) + jitter;
 }
+
+// Alternative picker skin: a slot machine. Same server draw, same seed — only
+// the visual differs, so the drawn winner is identical to the wheel.
+export const pickerStyles = ["wheel", "slots"] as const;
+export type PickerStyle = (typeof pickerStyles)[number];
+
+export const SLOT_REELS = 3;
+const SLOT_REEL_REPEATS = 8;
+
+// One slot reel's strip (participant ids top→bottom) plus the strip index the
+// reel parks on — that index is always the winner (jackpot: every reel matches).
+// Deterministic from (seed, reelIndex): each reel is the pool repeated with a
+// seed-derived rotation for filler variety, so all reels land on the winner
+// while showing different symbols on the way down. Rows are left below the stop
+// index for the "peek" of the next symbols. Same inputs → same strip on every
+// client (no local Math.random), so a mid-spin reconnect stays in lockstep.
+export function slotReel(
+  pool: readonly string[],
+  winnerId: string,
+  seed: number,
+  reelIndex: number,
+): { strip: string[]; stopIndex: number } {
+  const n = pool.length;
+  if (n === 0 || pool.indexOf(winnerId) === -1) {
+    return { strip: [], stopIndex: 0 };
+  }
+  const random = mulberry32((seed ^ ((reelIndex + 1) * 0x9e3779b1)) >>> 0);
+  const rotation = Math.floor(random() * n);
+  const rotated = pool.map((_, i) => pool[(i + rotation) % n] as string);
+  const strip: string[] = [];
+  for (let r = 0; r < SLOT_REEL_REPEATS; r++) strip.push(...rotated);
+  // Park two pool-lengths from the bottom so following symbols peek below.
+  const stopIndex = (SLOT_REEL_REPEATS - 2) * n + rotated.indexOf(winnerId);
+  return { strip, stopIndex };
+}
