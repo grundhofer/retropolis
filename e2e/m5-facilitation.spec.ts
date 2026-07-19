@@ -1,19 +1,33 @@
 import { expect, test, type Page } from "@playwright/test";
 
 // M5 acceptance: the check-in warm-up (icebreaker + shuffle + agreements) and
-// the anonymous ROTI closing poll.
+// the anonymous ROTI closing poll. Check-in is off by default and has no
+// creation toggle in the UI, so we opt in through the API (which exercises the
+// checkin:true flag) and seed the creator's admin token.
 test("check-in icebreaker, agreements, and anonymous ROTI", async ({
   browser,
 }) => {
   const annaContext = await browser.newContext({ reducedMotion: "reduce" });
+  const created = await annaContext.request.post("/api/boards", {
+    data: { name: "Sprint 46 retro", checkin: true, locale: "en" },
+  });
+  expect(created.ok()).toBe(true);
+  const { boardId, adminToken } = (await created.json()) as {
+    boardId: string;
+    adminToken: string;
+  };
+  await annaContext.addInitScript(
+    (data: { boardId: string; adminToken: string }) => {
+      localStorage.setItem(
+        `retropolis.board.${data.boardId}.adminToken`,
+        data.adminToken,
+      );
+    },
+    { boardId, adminToken },
+  );
   const anna = await annaContext.newPage();
-  await anna.goto("/");
-  await anna.getByRole("textbox").fill("Sprint 46 retro");
-  await anna
-    .getByRole("button", { name: /create board|board erstellen/i })
-    .click();
-  await expect(anna).toHaveURL(/\/board\/[0-9a-f]{32}$/);
-  const boardUrl = anna.url();
+  const boardUrl = `/board/${boardId}`;
+  await anna.goto(boardUrl);
   await join(anna, "Anna");
 
   const benContext = await browser.newContext({ reducedMotion: "reduce" });

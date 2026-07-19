@@ -25,10 +25,13 @@ export const phasePlanSchema = z.object({
 });
 export type PhasePlan = z.infer<typeof phasePlanSchema>;
 
-// From M5 on, new boards run the complete flow: warm up with a check-in,
-// end on appreciation. Existing boards keep the plan they were created with.
+// New boards skip the check-in warm-up by default (product decision: the
+// screen added little). The check-in phase and its icebreaker/agreements
+// machinery stay in the codebase and are reachable by opting in at creation
+// (create-board `checkin: true`), so the feature is dormant, not deleted.
+// Existing boards keep the plan they were created with.
 export const DEFAULT_PHASE_PLAN: PhasePlan = {
-  checkin: true,
+  checkin: false,
   vote: true,
   discuss: true,
   close: true,

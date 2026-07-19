@@ -22,8 +22,7 @@ test("wheel rotation, presenter focus, grouping and handoff", async ({
   await join(ben, "Ben");
   await expect(anna.getByTestId("roster-item")).toHaveCount(2);
 
-  // Write phase: each writes a duplicate-ish point (skip check-in first).
-  await anna.getByTestId("phase-next").click();
+  // Write phase: each writes a duplicate-ish point.
   await anna.getByTestId("phase-next").click();
   const annaComposer = anna
     .getByPlaceholder(/write a note|notiz schreiben/i)
@@ -62,6 +61,16 @@ test("wheel rotation, presenter focus, grouping and handoff", async ({
   await expect(ben.getByTestId("presenter-banner")).toContainText(
     firstPresenter,
   );
+
+  // Presenter isolation: once someone holds the mic, every screen shows only
+  // that person's cards; everyone else's are hidden until the round moves on.
+  await anna.getByTestId("wheel-winner").waitFor({ state: "hidden" });
+  const presenterNote =
+    firstPresenter === "Anna" ? "Deploys are slow" : "Deploys take forever";
+  const otherNote =
+    firstPresenter === "Anna" ? "Deploys take forever" : "Deploys are slow";
+  await expect(ben.getByText(presenterNote)).toBeVisible();
+  await expect(ben.getByText(otherNote)).toHaveCount(0);
 
   // Spin 2: the other person — no repeats.
   const secondPresenter = firstPresenter === "Anna" ? "Ben" : "Anna";

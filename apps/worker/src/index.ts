@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   boardLocaleSchema,
   boardNameSchema,
+  DEFAULT_PHASE_PLAN,
   EXPORT_FORMATS,
   exportContentType,
   renderExport,
@@ -20,6 +21,8 @@ const createBoardRequestSchema = z.object({
   name: boardNameSchema,
   template: templateKeySchema.default("went-well"),
   locale: boardLocaleSchema.default("en"),
+  // The check-in warm-up is off by default; opt in here to run the full flow.
+  checkin: z.boolean().default(false),
 });
 
 const duplicateBoardRequestSchema = z.object({
@@ -52,6 +55,10 @@ app.post("/api/boards", async (c) => {
     // Empty = the client shows a localized default set of agreements until the
     // facilitator edits them (avoids baking a locale into stored data).
     workingAgreements: "",
+    // Only overrides the default when the caller opts into the check-in phase.
+    ...(parsed.data.checkin
+      ? { phasePlan: { ...DEFAULT_PHASE_PLAN, checkin: true } }
+      : {}),
   });
   return c.json({ boardId, adminToken });
 });

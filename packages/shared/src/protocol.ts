@@ -297,6 +297,15 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
 
   z.object({ type: z.literal("admin.picker.spin") }),
   z.object({ type: z.literal("admin.picker.skip") }),
+  // Facilitator hand-picks the next presenter directly (no wheel) — same
+  // rotation bookkeeping as a spin, just a targeted draw.
+  z.object({
+    type: z.literal("admin.picker.pick"),
+    participantId: z.string(),
+  }),
+  // The person currently presenting marks themselves done (member OR
+  // facilitator) — completes their turn and hands control back to the wheel.
+  z.object({ type: z.literal("picker.done") }),
   z.object({
     type: z.literal("admin.picker.style"),
     style: pickerStyleSchema,
@@ -380,6 +389,11 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     readyIds: z.array(z.string()),
     columns: z.array(columnSchema),
     notes: z.array(noteSchema),
+    /** write-phase privacy relaxation: the TOTAL note count per column (no
+     *  author, no text). Clients subtract their own notes to show an
+     *  anonymized "N cards from the team" placeholder. Defaulted so older
+     *  snapshots parse. */
+    columnCounts: z.record(z.string(), z.number()).default({}),
     picker: pickerStateSchema.nullable(),
     /** the spin currently animating, if any — survives reconnect syncs */
     lastSpin: wheelSpinSchema.nullable(),
@@ -461,6 +475,13 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("notes.revealed"),
     seq: z.number(),
     notes: z.array(noteSchema),
+  }),
+  // Anonymized per-column note totals, broadcast during the write phase so
+  // members see that cards exist (count only — never author or text).
+  z.object({
+    type: z.literal("board.columnCounts"),
+    seq: z.number(),
+    counts: z.record(z.string(), z.number()),
   }),
 
   z.object({

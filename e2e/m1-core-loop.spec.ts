@@ -42,6 +42,9 @@ test("write → reveal core loop with two participants", async ({ browser }) => 
   await expect(anna.getByText("Secret note from Anna")).toBeVisible();
   await expect(ben.getByTestId("note-card")).toHaveCount(0);
   await expect(ben.getByText("Secret note from Anna")).toHaveCount(0);
+  // …but Ben DOES see that a card exists — an anonymized count, no content.
+  await expect(ben.getByTestId("team-cards")).toBeVisible();
+  await expect(ben.getByTestId("team-cards")).toContainText("1");
 
   // Ben writes his own — Anna doesn't see it either.
   await benComposer.fill("Ben's point");
@@ -157,8 +160,7 @@ async function join(page: Page, name: string): Promise<void> {
   await expect(page.getByTestId("roster-item").first()).toBeVisible();
 }
 
-// lobby → check-in → write (check-in is enabled by default from M5 on).
+// lobby → write (check-in is off by default now).
 async function toWrite(page: Page): Promise<void> {
-  await page.getByTestId("phase-next").click();
   await page.getByTestId("phase-next").click();
 }

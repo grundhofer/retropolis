@@ -31,14 +31,17 @@ async function toPhase(socket: TestSocket, phase: string) {
 }
 
 async function toClose(admin: { socket: TestSocket }) {
-  for (const p of ["checkin", "write", "present", "vote", "discuss", "close"]) {
+  for (const p of ["write", "present", "vote", "discuss", "close"]) {
     await toPhase(admin.socket, p);
   }
 }
 
 describe("check-in", () => {
   it("picks an icebreaker on entering check-in; the admin can shuffle it for everyone", async () => {
-    const { boardId, adminToken } = await createBoard();
+    // Check-in is off by default; opt in so the phase is reachable.
+    const { boardId, adminToken } = await createBoard("Sprint 12", {
+      checkin: true,
+    });
     const admin = await joined(boardId, "Anna", adminToken);
     const ben = await joined(boardId, "Ben");
 
@@ -68,7 +71,9 @@ describe("check-in", () => {
   });
 
   it("only the facilitator shuffles, and only during check-in", async () => {
-    const { boardId, adminToken } = await createBoard();
+    const { boardId, adminToken } = await createBoard("Sprint 12", {
+      checkin: true,
+    });
     const admin = await joined(boardId, "Anna", adminToken);
     const ben = await joined(boardId, "Ben");
     await toPhase(admin.socket, "checkin");
