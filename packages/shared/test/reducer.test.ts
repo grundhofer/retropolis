@@ -63,6 +63,7 @@ const sync: ServerEvent = {
   readyIds: [],
   columns: [column],
   notes: [note("a", anna.id, "mine")],
+  columnCounts: {},
   picker: null,
   lastSpin: null,
   votes: {

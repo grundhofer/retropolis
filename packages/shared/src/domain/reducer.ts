@@ -42,6 +42,10 @@ export interface ClientBoardState {
   readyIds: string[];
   columns: Column[];
   notes: Note[];
+  /** write-phase anonymized note totals per column (all authors). The client
+   *  subtracts its own notes to render "N cards from the team". Empty outside
+   *  the write phase. */
+  columnCounts: Record<string, number>;
   /** ghost cards: participantId -> columnId they are currently writing in */
   editing: Record<string, string>;
   /** presenter rotation; null until the board first enters "present" */
@@ -77,6 +81,7 @@ export const initialBoardState: ClientBoardState = {
   readyIds: [],
   columns: [],
   notes: [],
+  columnCounts: {},
   editing: {},
   picker: null,
   lastSpin: null,
@@ -112,6 +117,7 @@ export function applyServerEvent(
         readyIds: event.readyIds,
         columns: event.columns,
         notes: event.notes,
+        columnCounts: event.columnCounts,
         editing: {},
         picker: event.picker,
         lastSpin: event.lastSpin,
@@ -308,6 +314,13 @@ export function applyServerEvent(
       return { ...state, notes, lastSeq: seq(state, event.seq) };
     }
 
+    case "board.columnCounts":
+      return {
+        ...state,
+        columnCounts: event.counts,
+        lastSeq: seq(state, event.seq),
+      };
+
     case "phase.changed": {
       // Ready flags and timers are per-phase; ghosts are per-phase too. On a
       // rewind into an unrevealed phase, foreign notes vanish again — the
@@ -331,6 +344,9 @@ export function applyServerEvent(
         ...state,
         phase: event.phase,
         notes,
+        // Per-column counts are a write-phase signal; the server re-broadcasts
+        // fresh ones on entering write, so drop any stale set on every change.
+        columnCounts: {},
         readyIds: [],
         editing: {},
         timer: IDLE_TIMER,
