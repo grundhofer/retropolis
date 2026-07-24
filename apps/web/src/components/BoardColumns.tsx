@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import {
   generateHexId,
@@ -29,6 +30,9 @@ export interface DecidingState {
 export interface BoardColumnsProps {
   columns: Column[];
   notes: Note[];
+  /** write-phase anonymized note totals per column (all authors); used to show
+   *  "N cards from the team" without leaking author or text */
+  columnCounts: Record<string, number>;
   roster: Participant[];
   you: Participant;
   phase: Phase;
@@ -195,6 +199,7 @@ export function BoardColumns(props: BoardColumnsProps) {
 function BoardColumn({
   column,
   notes,
+  columnCounts,
   roster,
   you,
   phase,
@@ -220,11 +225,29 @@ function BoardColumn({
   const [renameValue, setRenameValue] = useState(column.name);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
+  // Presenting isolation: while someone holds the mic, EVERY screen (incl. the
+  // facilitator's, who may be sharing it) shows only that person's cards, so
+  // the room's attention is on the speaker. Between presenters (nobody current)
+  // the full board is back for grouping/overview.
+  const isolating = phase === "present" && presenterId !== null;
+
   // order is per-author (pre-reveal privacy: a global counter would leak the
   // hidden note count), so ties across authors are broken by id for stability.
   const columnNotes = notes
-    .filter((note) => note.columnId === column.id)
+    .filter(
+      (note) =>
+        note.columnId === column.id &&
+        (!isolating || note.authorId === presenterId),
+    )
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+
+  // Write-phase "cards exist" signal: how many of the column's cards belong to
+  // OTHER people. Before the reveal the client only holds its own notes, so
+  // (server total − my own) is exactly everyone else's — no author, no text.
+  const othersCardCount =
+    phase === "write"
+      ? Math.max(0, (columnCounts[column.id] ?? 0) - columnNotes.length)
+      : 0;
 
   // Stacks: notes sharing a groupId render together, at the position of the
   // stack's first note.
@@ -439,6 +462,9 @@ function BoardColumn({
             </TargetFrame>
           );
         })}
+        {isolating && items.length === 0 ? (
+          <p className="px-1 py-6 text-center text-sm text-zinc-300">—</p>
+        ) : null}
         {ghosts.map((ghost) => (
           <div
             key={ghost.id}
@@ -460,7 +486,21 @@ function BoardColumn({
             </div>
           </div>
         ))}
-        {phaseAllowsComposer(phase) ? (
+        {othersCardCount > 0 ? (
+          <div
+            data-testid="team-cards"
+            className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50/60 px-3 py-2"
+          >
+            <div className="space-y-1.5">
+              <div className="h-2 w-4/5 rounded bg-zinc-200/70" />
+              <div className="h-2 w-3/5 rounded bg-zinc-200/70" />
+            </div>
+            <p className="mt-2 text-xs text-zinc-400">
+              {t("rail.teamCards", { count: othersCardCount })}
+            </p>
+          </div>
+        ) : null}
+        {phaseAllowsComposer(phase) && !isolating ? (
           <NoteComposer
             columnId={column.id}
             you={you}
@@ -585,6 +625,31 @@ function NoteComposer({
   const [text, setText] = useState("");
   const [gifUrl, setGifUrl] = useState<string | null>(null);
   const [gifOpen, setGifOpen] = useState(false);
+  const gifButtonRef = useRef<HTMLButtonElement>(null);
+  // The GIF popover is portaled to <body> with fixed coordinates so it escapes
+  // the columns' horizontal-scroll container (which clips absolute children and
+  // made the picker overflow onto neighbouring columns). Anchored above the
+  // button, clamped to the viewport.
+  const [gifAnchor, setGifAnchor] = useState<{
+    left: number;
+    bottom: number;
+  } | null>(null);
+
+  function toggleGif() {
+    if (gifOpen) {
+      setGifOpen(false);
+      return;
+    }
+    const rect = gifButtonRef.current?.getBoundingClientRect();
+    if (rect) {
+      const width = 288; // GifPicker is w-72
+      setGifAnchor({
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+        bottom: window.innerHeight - rect.top + 6,
+      });
+    }
+    setGifOpen(true);
+  }
 
   function submit() {
     const trimmed = text.trim();
@@ -669,27 +734,46 @@ function NoteComposer({
           </button>
         ) : null}
         {gifsEnabled && gifUrl === null ? (
-          <div className="relative">
+          <>
             <button
+              ref={gifButtonRef}
               type="button"
               data-testid={`composer-gif-${columnId}`}
-              onClick={() => setGifOpen(!gifOpen)}
+              onClick={toggleGif}
               className="rounded-lg border border-zinc-200 px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50"
             >
               🎞 {t("gif.add")}
             </button>
-            {gifOpen ? (
-              <div className="absolute bottom-9 left-0 z-40">
-                <GifPicker
-                  onPick={(url) => {
-                    setGifUrl(url);
-                    setGifOpen(false);
-                  }}
-                  onClose={() => setGifOpen(false)}
-                />
-              </div>
-            ) : null}
-          </div>
+            {gifOpen && gifAnchor
+              ? createPortal(
+                  <div className="fixed inset-0 z-50">
+                    <button
+                      type="button"
+                      aria-label={t("note.cancel")}
+                      tabIndex={-1}
+                      onClick={() => setGifOpen(false)}
+                      className="absolute inset-0 cursor-default"
+                    />
+                    <div
+                      className="absolute"
+                      style={{
+                        left: gifAnchor.left,
+                        bottom: gifAnchor.bottom,
+                      }}
+                    >
+                      <GifPicker
+                        onPick={(url) => {
+                          setGifUrl(url);
+                          setGifOpen(false);
+                        }}
+                        onClose={() => setGifOpen(false)}
+                      />
+                    </div>
+                  </div>,
+                  document.body,
+                )
+              : null}
+          </>
         ) : null}
       </div>
     </form>

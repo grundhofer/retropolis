@@ -12,7 +12,7 @@ import { KudosWall } from "../components/KudosWall.js";
 import { RotiPoll } from "../components/RotiPoll.js";
 import { LanguageToggle } from "../components/LanguageToggle.js";
 import { PhaseStepper } from "../components/PhaseStepper.js";
-import { PickerPanel } from "../components/PickerPanel.js";
+import { PresenceRail } from "../components/PresenceRail.js";
 import { ReadyBar } from "../components/ReadyBar.js";
 import { Roster } from "../components/Roster.js";
 import { ShareLink } from "../components/ShareLink.js";
@@ -314,16 +314,13 @@ function Room({
         {!inLobby && state.phase !== "done" ? (
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-zinc-100 bg-white/60 px-6 py-2">
             <TimerPanel timer={state.timer} isAdmin={isAdmin} />
-            <ReadyBar
-              readyIds={state.readyIds}
-              roster={state.roster}
-              youId={you.id}
-            />
-            {state.phase === "present" ? (
-              <PickerPanel
-                picker={state.picker}
+            {/* Ready lives in the presence rail for the board phases; check-in
+                has no rail, so keep the inline toggle there. */}
+            {state.phase === "checkin" ? (
+              <ReadyBar
+                readyIds={state.readyIds}
                 roster={state.roster}
-                isAdmin={isAdmin}
+                youId={you.id}
               />
             ) : null}
             {state.phase === "vote" && config ? (
@@ -398,11 +395,12 @@ function Room({
               ) : null}
             </div>
           ) : (
-            <div className="flex items-start gap-6">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
               <div className="min-w-0 flex-1">
                 <BoardColumns
                   columns={state.columns}
                   notes={state.notes}
+                  columnCounts={state.columnCounts}
                   roster={state.roster}
                   you={you}
                   phase={state.phase}
@@ -437,6 +435,14 @@ function Room({
                   readOnly={false}
                 />
               ) : null}
+              <PresenceRail
+                phase={state.phase}
+                roster={state.roster}
+                readyIds={state.readyIds}
+                picker={state.picker}
+                you={you}
+                isAdmin={isAdmin}
+              />
             </div>
           )}
         </main>

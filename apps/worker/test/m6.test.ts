@@ -72,7 +72,6 @@ describe("board duplication", () => {
     await admin.socket.waitFor((e) => e.type === "agreements.changed");
 
     // Add a note — content that must NOT cross into the copy.
-    await toPhase(admin.socket, "checkin");
     await toPhase(admin.socket, "write");
     ben.socket.send({
       type: "note.create",
@@ -220,7 +219,6 @@ describe("board duplication", () => {
 });
 
 async function toWrite(socket: TestSocket) {
-  await toPhase(socket, "checkin");
   await toPhase(socket, "write");
 }
 

@@ -22,8 +22,7 @@ test("staged columns hide from members and reveal again", async ({
   await ben.goto(boardUrl);
   await join(ben, "Ben");
 
-  // Into the write phase so the board grid renders (checkin → write).
-  await anna.getByTestId("phase-next").click();
+  // Into the write phase so the board grid renders.
   await anna.getByTestId("phase-next").click();
 
   const col = "To improve";
@@ -108,8 +107,7 @@ test("slot-machine picker skin spins to a winner", async ({ browser }) => {
   );
   await anna.getByTestId("board-menu").click();
 
-  // Into the present phase (checkin → write → present) and spin.
-  await anna.getByTestId("phase-next").click();
+  // Into the present phase (write → present) and spin.
   await anna.getByTestId("phase-next").click();
   await anna.getByTestId("phase-next").click();
   await anna.getByTestId("spin-button").click();

@@ -42,7 +42,6 @@ async function toPhase(admin: { socket: TestSocket }, phase: string) {
 async function boardInPhase(phase: "write" | "present") {
   const { boardId, adminToken } = await createBoard();
   const admin = await joined(boardId, "Anna", adminToken);
-  await toPhase(admin, "checkin"); // checkin is enabled by default now
   await toPhase(admin, "write");
   if (phase === "present") {
     admin.socket.send({ type: "admin.phase.set", phase: "present" });

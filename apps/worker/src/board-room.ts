@@ -23,6 +23,7 @@ import {
   type Participant,
   type ParticipantRole,
   type Phase,
+  type PhasePlan,
   type PickerState,
   type RejectCode,
   type ServerEvent,
@@ -99,6 +100,9 @@ export interface BoardCreation {
     hidden?: boolean;
   }>;
   workingAgreements: string;
+  /** opt back into an otherwise-default flow (e.g. enable the check-in phase,
+   *  which is off by default). Ignored when a full `config` is supplied. */
+  phasePlan?: PhasePlan;
   /** seeded when duplicating an existing board — structure only. Absent for a
    *  fresh board, which falls back to the built-in defaults. */
   config?: BoardConfig;
@@ -250,7 +254,7 @@ export class BoardRoom extends DurableObject<Env> {
       creation.adminToken,
       String(now),
       config?.anonymous ? "1" : "0",
-      JSON.stringify(config?.phasePlan ?? DEFAULT_PHASE_PLAN),
+      JSON.stringify(config?.phasePlan ?? creation.phasePlan ?? DEFAULT_PHASE_PLAN),
       config === undefined || config.gifsEnabled ? "1" : "0",
       config?.pickerStyle ?? "wheel",
       String(config?.votesPerPerson ?? DEFAULT_VOTE_CONFIG.votesPerPerson),
@@ -434,6 +438,12 @@ export class BoardRoom extends DurableObject<Env> {
         return;
       case "admin.picker.skip":
         this.handlePickerSkip(ws, participant);
+        return;
+      case "admin.picker.pick":
+        this.handlePickerPick(ws, participant, command);
+        return;
+      case "picker.done":
+        this.handlePickerDone(ws, participant);
         return;
       case "admin.picker.exclude":
       case "admin.picker.include":
@@ -835,6 +845,8 @@ export class BoardRoom extends DurableObject<Env> {
       (n) => ({ type: "note.created", seq, note: n }),
       note,
     );
+    // Members can't see the note itself pre-reveal, but they learn the count.
+    this.broadcastColumnCountsIfWriting();
   }
 
   private handleNoteUpdate(
@@ -982,6 +994,8 @@ export class BoardRoom extends DurableObject<Env> {
           : null,
       );
     }
+    // Deleting during write lowers the anonymized count members see.
+    this.broadcastColumnCountsIfWriting();
   }
 
   private handleNoteReact(
@@ -1169,6 +1183,12 @@ export class BoardRoom extends DurableObject<Env> {
     // so the room doesn't get a new question every time it re-enters).
     if (target === "checkin" && this.getMeta("icebreakerId") === null) {
       this.shuffleIcebreaker();
+    }
+
+    // Entering (or rewinding into) write: seed everyone with the current
+    // per-column totals so the "cards from the team" placeholder is right away.
+    if (target === "write") {
+      this.broadcastColumnCountsIfWriting();
     }
   }
 
@@ -1657,6 +1677,8 @@ export class BoardRoom extends DurableObject<Env> {
       // it from members who can no longer see it.
       this.broadcastNoteReorg(updated);
     }
+    // Moving between columns during write shifts the per-column totals.
+    this.broadcastColumnCountsIfWriting();
   }
 
   /** Keeps two invariants after a note leaves (or is deleted from) a group:
@@ -1802,6 +1824,99 @@ export class BoardRoom extends DurableObject<Env> {
     const updated: PickerState = {
       ...picker,
       remaining: [...picker.remaining, picker.current],
+      current: null,
+    };
+    this.savePicker(updated);
+    this.broadcastAll({
+      type: "picker.changed",
+      seq: this.nextSeq(),
+      picker: updated,
+    });
+  }
+
+  // Facilitator hand-picks the next presenter directly (no wheel). Same
+  // rotation bookkeeping as a spin: auto-complete whoever is up, then put the
+  // chosen (remaining) person on stage.
+  private handlePickerPick(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.picker.pick" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(ws, undefined, "NOT_ADMIN", "Only the facilitator picks");
+      return;
+    }
+    if (this.phase() !== "present") {
+      this.reject(
+        ws,
+        undefined,
+        "PHASE_LOCKED",
+        "Presenters are picked in the presenting phase",
+      );
+      return;
+    }
+    // Don't yank the stage out from under an animating wheel.
+    const activeSpin = this.lastSpin();
+    if (
+      activeSpin !== null &&
+      Date.now() < activeSpin.startAt + activeSpin.durationMs
+    ) {
+      this.reject(ws, undefined, "INVALID", "The wheel is still spinning");
+      return;
+    }
+    let picker = this.picker() ?? EMPTY_PICKER;
+    if (!picker.remaining.includes(cmd.participantId)) {
+      this.reject(ws, undefined, "INVALID", "That person is not up next");
+      return;
+    }
+    if (picker.current !== null) {
+      picker = {
+        ...picker,
+        presented: [...picker.presented, picker.current],
+        current: null,
+      };
+    }
+    picker = {
+      ...picker,
+      remaining: picker.remaining.filter((id) => id !== cmd.participantId),
+      current: cmd.participantId,
+    };
+    this.savePicker(picker);
+    this.broadcastAll({
+      type: "picker.changed",
+      seq: this.nextSeq(),
+      picker,
+    });
+  }
+
+  // The person on stage marks their own turn done (member OR facilitator).
+  // A stale click (the facilitator already advanced) fails the sender===current
+  // check and rejects — the client resyncs off that.
+  private handlePickerDone(
+    ws: WebSocket,
+    participant: ParticipantRow,
+  ): void {
+    if (this.phase() !== "present") {
+      this.reject(
+        ws,
+        undefined,
+        "PHASE_LOCKED",
+        "The presenting round is not active",
+      );
+      return;
+    }
+    const picker = this.picker();
+    if (picker === null || picker.current === null) {
+      this.reject(ws, undefined, "INVALID", "Nobody is presenting");
+      return;
+    }
+    if (picker.current !== participant.id) {
+      this.reject(ws, undefined, "INVALID", "You are not the one presenting");
+      return;
+    }
+    const updated: PickerState = {
+      ...picker,
+      presented: [...picker.presented, picker.current],
       current: null,
     };
     this.savePicker(updated);
@@ -2936,6 +3051,31 @@ export class BoardRoom extends DurableObject<Env> {
       : null;
   }
 
+  // Anonymized note totals per column (all authors, no ids, no text) — the
+  // write-phase "cards exist" signal. Columns with no notes are simply absent
+  // (the client reads them as 0).
+  private columnCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const row of this.sql
+      .exec("SELECT column_id, COUNT(*) AS n FROM notes GROUP BY column_id")
+      .toArray()) {
+      counts[String(row.column_id)] = Number(row.n);
+    }
+    return counts;
+  }
+
+  // Broadcast fresh counts, but only while writing — the placeholder they feed
+  // is a write-phase affordance, and from the reveal on everyone sees the notes
+  // themselves.
+  private broadcastColumnCountsIfWriting(): void {
+    if (this.phase() !== "write") return;
+    this.broadcastAll({
+      type: "board.columnCounts",
+      seq: this.nextSeq(),
+      counts: this.columnCounts(),
+    });
+  }
+
   private buildSync(
     participant: ParticipantRow,
     sessionKey: string,
@@ -2963,6 +3103,9 @@ export class BoardRoom extends DurableObject<Env> {
         hiddenColumns === null
           ? this.columns()
           : this.columns().filter((c) => !c.hidden),
+      // Anonymized per-column totals only matter while writing; other phases
+      // reveal the notes themselves, so send an empty map there.
+      columnCounts: phase === "write" ? this.columnCounts() : {},
       picker: this.picker(),
       lastSpin: this.activeSpinForSync(),
       votes: this.votesForSync(participant.id, phase),

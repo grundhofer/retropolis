@@ -30,11 +30,9 @@ async function joined(
 
 async function advanceTo(
   admin: { socket: TestSocket },
-  phases: ReadonlyArray<"checkin" | "write" | "present" | "vote" | "discuss">,
+  phases: ReadonlyArray<"write" | "present" | "vote" | "discuss">,
 ): Promise<void> {
-  const full =
-    phases[0] === "write" ? (["checkin", ...phases] as const) : phases;
-  for (const phase of full) {
+  for (const phase of phases) {
     admin.socket.send({ type: "admin.phase.set", phase });
     await admin.socket.waitFor(
       (e) => e.type === "phase.changed" && e.phase === phase,
