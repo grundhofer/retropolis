@@ -125,7 +125,7 @@ export function NoteCard({
       }}
       className={`reveal-in rounded-xl border bg-white p-3 shadow-sm transition-opacity ${
         dropHover ? "border-accent ring-2 ring-accent/40" : "border-zinc-200"
-      } ${spotlighted ? "ring-2 ring-accent" : ""} ${dimmed ? "opacity-45" : ""} ${
+      } ${spotlighted ? "ring-2 ring-accent shadow-md" : ""} ${dimmed ? "opacity-45" : ""} ${
         canDrag && !editing ? "cursor-grab active:cursor-grabbing" : ""
       }`}
       style={{ animationDelay: `${Math.min(revealIndex, 12) * 45}ms` }}

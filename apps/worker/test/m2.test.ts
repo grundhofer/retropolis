@@ -60,7 +60,6 @@ async function presentingBoard() {
   const { boardId, adminToken } = await createBoard();
   const admin = await joined(boardId, "Anna", adminToken);
   const ben = await joined(boardId, "Ben");
-  await toPhase(admin.socket, "checkin"); // checkin is enabled by default
   await toPhase(admin.socket, "write");
   await toPhase(admin.socket, "present");
   return { boardId, adminToken, admin, ben };
@@ -91,6 +90,69 @@ describe("picker rotation", () => {
     );
     expect(changed.picker.presented).toEqual([]);
     expect(changed.picker.current).toBeNull();
+  });
+
+  it("facilitator can hand-pick the next presenter directly (no wheel)", async () => {
+    const { admin, ben } = await presentingBoard();
+    await admin.socket.waitFor((e) => e.type === "picker.changed");
+
+    admin.socket.send({
+      type: "admin.picker.pick",
+      participantId: ben.you.id,
+    });
+    const picked = await ben.socket.waitFor(
+      (e) => e.type === "picker.changed" && e.picker.current === ben.you.id,
+    );
+    if (picked.type !== "picker.changed") throw new Error("unreachable");
+    expect(picked.picker.remaining).not.toContain(ben.you.id);
+    expect(picked.picker.presented).toEqual([]);
+
+    // Picking the next person auto-completes the one who was up.
+    admin.socket.send({
+      type: "admin.picker.pick",
+      participantId: admin.you.id,
+    });
+    const second = await admin.socket.waitFor(
+      (e) => e.type === "picker.changed" && e.picker.current === admin.you.id,
+    );
+    if (second.type !== "picker.changed") throw new Error("unreachable");
+    expect(second.picker.presented).toEqual([ben.you.id]);
+
+    // Members cannot hand-pick.
+    ben.socket.send({ type: "admin.picker.pick", participantId: ben.you.id });
+    const rejected = await ben.socket.waitFor((e) => e.type === "reject");
+    if (rejected.type !== "reject") throw new Error("unreachable");
+    expect(rejected.code).toBe("NOT_ADMIN");
+  });
+
+  it("the person on stage can mark their own turn done", async () => {
+    const { admin, ben } = await presentingBoard();
+    await admin.socket.waitFor((e) => e.type === "picker.changed");
+    admin.socket.send({
+      type: "admin.picker.pick",
+      participantId: ben.you.id,
+    });
+    await ben.socket.waitFor(
+      (e) => e.type === "picker.changed" && e.picker.current === ben.you.id,
+    );
+
+    // Someone who isn't presenting can't end the turn.
+    admin.socket.send({ type: "picker.done" });
+    const wrong = await admin.socket.waitFor((e) => e.type === "reject");
+    if (wrong.type !== "reject") throw new Error("unreachable");
+    expect(wrong.code).toBe("INVALID");
+
+    // The presenter self-advances; control hands back to the wheel. (Match on
+    // presented so the initial pool-init picker.changed doesn't satisfy it.)
+    ben.socket.send({ type: "picker.done" });
+    const done = await admin.socket.waitFor(
+      (e) =>
+        e.type === "picker.changed" &&
+        e.picker.current === null &&
+        e.picker.presented.includes(ben.you.id),
+    );
+    if (done.type !== "picker.changed") throw new Error("unreachable");
+    expect(done.picker.presented).toContain(ben.you.id);
   });
 
   it("spins draw without replacement until everyone presented, synced to all", async () => {
@@ -213,6 +275,38 @@ describe("picker rotation", () => {
   });
 });
 
+describe("write-phase card counts", () => {
+  it("broadcasts anonymized per-column totals during write (no author, no text)", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    const ben = await joined(boardId, "Ben");
+    await toPhase(admin.socket, "write");
+    const columnId = admin.sync.columns[0]?.id;
+    if (!columnId) throw new Error("setup");
+
+    // Ben cannot see Anna's note before the reveal — but learns the count.
+    await createNote(admin.socket, columnId, "secret");
+    const counts = await ben.socket.waitFor(
+      (e) =>
+        e.type === "board.columnCounts" && (e.counts[columnId] ?? 0) === 1,
+    );
+    if (counts.type !== "board.columnCounts") throw new Error("unreachable");
+    expect(counts.counts[columnId]).toBe(1);
+    // The note body never crossed to Ben.
+    expect(ben.socket.events.some((e) => e.type === "note.created")).toBe(
+      false,
+    );
+
+    // A second author's note bumps the total to 2 for everyone.
+    await createNote(ben.socket, columnId, "mine");
+    const bumped = await admin.socket.waitFor(
+      (e) =>
+        e.type === "board.columnCounts" && (e.counts[columnId] ?? 0) === 2,
+    );
+    expect(bumped.type).toBe("board.columnCounts");
+  });
+});
+
 describe("picker style (skin)", () => {
   it("defaults to the wheel and lets the facilitator switch to slots for everyone", async () => {
     const { boardId, admin, ben } = await presentingBoard();
@@ -279,7 +373,6 @@ describe("grouping & moving", () => {
   it("grouping is locked before the reveal", async () => {
     const { boardId, adminToken } = await createBoard();
     const admin = await joined(boardId, "Anna", adminToken);
-    await toPhase(admin.socket, "checkin");
     await toPhase(admin.socket, "write");
     const columnId = admin.sync.columns[0]?.id;
     if (!columnId) throw new Error("setup");
@@ -379,9 +472,9 @@ describe("facilitator handoff", () => {
     expect(promoted.type).toBe("roster.updated");
 
     // Now Ben can act as facilitator (e.g. advance the phase from lobby)…
-    ben.socket.send({ type: "admin.phase.set", phase: "checkin" });
+    ben.socket.send({ type: "admin.phase.set", phase: "write" });
     await ben.socket.waitFor(
-      (e) => e.type === "phase.changed" && e.phase === "checkin",
+      (e) => e.type === "phase.changed" && e.phase === "write",
     );
 
     // …and Anna can step down since Ben remains.

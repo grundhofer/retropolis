@@ -21,7 +21,7 @@ test("kudos wall, export and delete-now", async ({ browser }) => {
   await expect(anna.getByTestId("roster-item")).toHaveCount(2);
 
   // Walk to the close phase (write → present → vote → discuss → close).
-  for (let i = 0; i < 6; i++) await anna.getByTestId("phase-next").click();
+  for (let i = 0; i < 5; i++) await anna.getByTestId("phase-next").click();
   await expect(
     anna.getByRole("heading", { name: /appreciation|wertschätzung/i }),
   ).toBeVisible();
@@ -100,7 +100,6 @@ test("GIF search degrades gracefully with no key configured", async ({
     .click();
   await expect(page).toHaveURL(/\/board\/[0-9a-f]{32}$/);
   await join(page, "Solo");
-  await page.getByTestId("phase-next").click(); // check-in
   await page.getByTestId("phase-next").click(); // write
 
   const columnId = await page
