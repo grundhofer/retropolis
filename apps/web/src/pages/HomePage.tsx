@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
-import { TEMPLATE_KEYS, type TemplateKey } from "@retropolis/shared";
+import {
+  layoutModes,
+  TEMPLATE_KEYS,
+  type LayoutMode,
+  type TemplateKey,
+} from "@retropolis/shared";
 import { LanguageToggle } from "../components/LanguageToggle.js";
 import { createBoard } from "../lib/api.js";
 import { saveAdminToken } from "../lib/session.js";
@@ -11,6 +16,7 @@ export function HomePage() {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [template, setTemplate] = useState<TemplateKey>("went-well");
+  const [layout, setLayout] = useState<LayoutMode>("columns");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -25,6 +31,7 @@ export function HomePage() {
         name.trim(),
         template,
         locale,
+        layout,
       );
       saveAdminToken(boardId, adminToken);
       void navigate(`/board/${boardId}`);
@@ -84,6 +91,32 @@ export function HomePage() {
                 {t(`template.${template}.hint`)}
               </span>
             </label>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium text-zinc-700">
+                {t("home.layout")}
+              </span>
+              <div className="flex gap-2" role="group">
+                {layoutModes.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    data-testid={`home-layout-${mode}`}
+                    aria-pressed={layout === mode}
+                    onClick={() => setLayout(mode)}
+                    className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium ${
+                      layout === mode
+                        ? "border-accent bg-accent/10 text-accent-strong"
+                        : "border-zinc-300 text-zinc-600 hover:bg-zinc-50"
+                    }`}
+                  >
+                    {t(`home.layoutMode.${mode}`)}
+                  </button>
+                ))}
+              </div>
+              <span className="text-sm text-zinc-400">
+                {t(`home.layoutHint.${layout}`)}
+              </span>
+            </div>
             <button
               type="submit"
               disabled={busy || name.trim() === ""}

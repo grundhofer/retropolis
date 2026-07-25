@@ -5,6 +5,7 @@ import {
   boardNameSchema,
   DEFAULT_PHASE_PLAN,
   EXPORT_FORMATS,
+  layoutModeSchema,
   exportContentType,
   renderExport,
   templateColumnNames,
@@ -23,6 +24,8 @@ const createBoardRequestSchema = z.object({
   locale: boardLocaleSchema.default("en"),
   // The check-in warm-up is off by default; opt in here to run the full flow.
   checkin: z.boolean().default(false),
+  // Board layout: classic columns (default) or the freeform canvas.
+  layout: layoutModeSchema.default("columns"),
 });
 
 const duplicateBoardRequestSchema = z.object({
@@ -55,6 +58,7 @@ app.post("/api/boards", async (c) => {
     // Empty = the client shows a localized default set of agreements until the
     // facilitator edits them (avoids baking a locale into stored data).
     workingAgreements: "",
+    layout: parsed.data.layout,
     // Only overrides the default when the caller opts into the check-in phase.
     ...(parsed.data.checkin
       ? { phasePlan: { ...DEFAULT_PHASE_PLAN, checkin: true } }

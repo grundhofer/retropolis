@@ -307,6 +307,158 @@ describe("write-phase card counts", () => {
   });
 });
 
+describe("canvas layout & positions", () => {
+  it("facilitator switches layout live; members get config.changed; members cannot", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    const ben = await joined(boardId, "Ben");
+    expect(admin.sync.config.layout).toBe("columns");
+
+    admin.socket.send({ type: "admin.layout.set", layout: "canvas" });
+    const changed = await ben.socket.waitFor(
+      (e) => e.type === "config.changed" && e.config.layout === "canvas",
+    );
+    expect(changed.type).toBe("config.changed");
+
+    ben.socket.send({ type: "admin.layout.set", layout: "columns" });
+    const rejected = await ben.socket.waitFor((e) => e.type === "reject");
+    if (rejected.type !== "reject") throw new Error("unreachable");
+    expect(rejected.code).toBe("NOT_ADMIN");
+  });
+
+  it("a board created with layout:canvas reports it in sync", async () => {
+    const { boardId, adminToken } = await createBoard("Canvas", {
+      layout: "canvas",
+    });
+    const admin = await joined(boardId, "Anna", adminToken);
+    expect(admin.sync.config.layout).toBe("canvas");
+  });
+
+  it("a note created with a canvas position round-trips", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    await toPhase(admin.socket, "write");
+    const columnId = admin.sync.columns[0]?.id;
+    if (!columnId) throw new Error("setup");
+    const noteId = newId();
+    admin.socket.send({
+      type: "note.create",
+      opId: opId(),
+      noteId,
+      columnId,
+      text: "placed",
+      x: 0.9,
+      y: 0.1,
+    });
+    const created = await admin.socket.waitFor(
+      (e) => e.type === "note.created" && e.note.id === noteId,
+    );
+    if (created.type !== "note.created") throw new Error("unreachable");
+    expect(created.note.x).toBe(0.9);
+    expect(created.note.y).toBe(0.1);
+  });
+
+  it("a same-zone canvas reposition (x present) is persisted, not swallowed as a no-op", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    await toPhase(admin.socket, "write");
+    const columnId = admin.sync.columns[0]?.id;
+    if (!columnId) throw new Error("setup");
+    const noteId = await createNote(admin.socket, columnId, "hi");
+    admin.socket.send({
+      type: "note.move",
+      opId: opId(),
+      noteId,
+      columnId,
+      x: 0.25,
+      y: 0.75,
+    });
+    const moved = await admin.socket.waitFor(
+      (e) => e.type === "note.updated" && e.note.id === noteId && e.note.x === 0.25,
+    );
+    if (moved.type !== "note.updated") throw new Error("unreachable");
+    expect(moved.note.y).toBe(0.75);
+    expect(moved.note.columnId).toBe(columnId);
+  });
+
+  it("a cross-zone canvas drop persists the new position and clears the group", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    await toPhase(admin.socket, "write");
+    const col0 = admin.sync.columns[0]?.id;
+    const col1 = admin.sync.columns[1]?.id;
+    if (!col0 || !col1) throw new Error("setup");
+    const noteId = await createNote(admin.socket, col0, "move me");
+    admin.socket.send({
+      type: "note.move",
+      opId: opId(),
+      noteId,
+      columnId: col1,
+      x: 0.6,
+      y: 0.2,
+    });
+    const moved = await admin.socket.waitFor(
+      (e) =>
+        e.type === "note.updated" &&
+        e.note.id === noteId &&
+        e.note.columnId === col1,
+    );
+    if (moved.type !== "note.updated") throw new Error("unreachable");
+    expect(moved.note.x).toBe(0.6);
+    expect(moved.note.groupId).toBeNull();
+  });
+
+  it("same-zone canvas reposition KEEPS a stack; column-mode drag (no x) still ungroups", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    const ben = await joined(boardId, "Ben");
+    await toPhase(admin.socket, "write");
+    const columnId = admin.sync.columns[0]?.id;
+    if (!columnId) throw new Error("setup");
+    const a = await createNote(admin.socket, columnId, "aa");
+    const b = await createNote(ben.socket, columnId, "bb");
+    await toPhase(admin.socket, "present");
+
+    // Stack b onto a.
+    admin.socket.send({
+      type: "note.group",
+      opId: opId(),
+      noteId: b,
+      targetNoteId: a,
+    });
+    await admin.socket.waitFor(
+      (e) => e.type === "note.updated" && e.note.id === b && e.note.groupId !== null,
+    );
+
+    // Canvas reposition of the stacked note (x present) → keeps the stack.
+    admin.socket.send({
+      type: "note.move",
+      opId: opId(),
+      noteId: b,
+      columnId,
+      x: 0.3,
+      y: 0.4,
+    });
+    const repositioned = await admin.socket.waitFor(
+      (e) => e.type === "note.updated" && e.note.id === b && e.note.x === 0.3,
+    );
+    if (repositioned.type !== "note.updated") throw new Error("unreachable");
+    expect(repositioned.note.groupId).not.toBeNull();
+
+    // Column-mode drag onto its own column (NO x) → the shipped ungroup gesture.
+    admin.socket.send({
+      type: "note.move",
+      opId: opId(),
+      noteId: b,
+      columnId,
+    });
+    const ungrouped = await admin.socket.waitFor(
+      (e) => e.type === "note.updated" && e.note.id === b && e.note.groupId === null,
+    );
+    expect(ungrouped.type).toBe("note.updated");
+  });
+});
+
 describe("picker style (skin)", () => {
   it("defaults to the wheel and lets the facilitator switch to slots for everyone", async () => {
     const { boardId, admin, ben } = await presentingBoard();
