@@ -7,5 +7,6 @@ coverage/
 playwright-report/
 test-results/
 .vitest-attachments/
+**/__screenshots__/
 .DS_Store
 *.tsbuildinfo

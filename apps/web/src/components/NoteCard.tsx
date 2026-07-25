@@ -23,6 +23,12 @@ export interface NoteCardProps {
   presenterId: string | null;
   onDropNote: (sourceNoteId: string, target: Note) => void;
   onUngroup: (note: Note) => void;
+  /** read-only rendering (the presenter reader): drag/edit/delete/curate off,
+   *  reactions kept. Default true. */
+  interactive?: boolean;
+  /** HTML5 drag affordance; the canvas turns this off and drags a wrapper via
+   *  pointer events instead, while keeping edit/delete. Default true. */
+  draggable?: boolean;
 }
 
 export function NoteCard({
@@ -35,6 +41,8 @@ export function NoteCard({
   presenterId,
   onDropNote,
   onUngroup,
+  interactive = true,
+  draggable = true,
 }: NoteCardProps) {
   const { t } = useTranslation();
   const { mutate } = useConnection();
@@ -46,12 +54,15 @@ export function NoteCard({
   const author =
     note.authorId === null ? null : roster.find((p) => p.id === note.authorId);
   const revealed = phaseRevealed(phase) && phase !== "done";
-  const canEdit = mine && (phase === "write" || phase === "present");
-  const canDelete = (mine || isAdmin) && phase !== "done";
+  const canEdit = interactive && mine && (phase === "write" || phase === "present");
+  const canDelete = interactive && (mine || isAdmin) && phase !== "done";
   // Reorganizing (drag to group/move, unstack) happens in write (own notes)
   // and present (everyone) — frozen once voting starts, stacks are votables.
-  const canCurate = phase === "present";
-  const canDrag = canCurate || (phase === "write" && mine);
+  const canCurate = interactive && phase === "present";
+  // The canvas positions cards via a pointer-drag wrapper, so it turns off the
+  // card's own HTML5 drag while keeping edit/delete.
+  const canDrag =
+    interactive && draggable && (canCurate || (phase === "write" && mine));
   const spotlighted = presenterId !== null && note.authorId === presenterId;
   const dimmed = presenterId !== null && note.authorId !== presenterId;
 

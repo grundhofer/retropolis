@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router";
-import type { BoardInfo, ClientCommand, ServerEvent } from "@retropolis/shared";
+import {
+  boardSurface,
+  type BoardInfo,
+  type ClientCommand,
+  type ServerEvent,
+} from "@retropolis/shared";
 import { ActionsPanel } from "../components/ActionsPanel.js";
 import { AvatarRow } from "../components/AvatarRow.js";
+import { BoardCanvas } from "../components/BoardCanvas.js";
 import { BoardColumns } from "../components/BoardColumns.js";
 import { BoardMenu } from "../components/BoardMenu.js";
+import { PresenterFocus } from "../components/PresenterFocus.js";
 import { CheckinPanel } from "../components/CheckinPanel.js";
 import { DiscussBar } from "../components/DiscussBar.js";
 import { KudosWall } from "../components/KudosWall.js";
@@ -232,6 +239,18 @@ function Room({
     state.phase === "done";
   const showActions = talliesShown;
 
+  // Which surface the board area renders: classic columns, the freeform canvas,
+  // or the presenter reader. Canvas is confined to write + the between-presenters
+  // overview; everything read/voted/discussed routes to the structured columns.
+  const presenterId =
+    state.phase === "present" ? (state.picker?.current ?? null) : null;
+  const layout = config?.layout ?? "columns";
+  const surface = boardSurface(layout, state.phase, presenterId !== null);
+  const presenter =
+    presenterId !== null
+      ? (state.roster.find((p) => p.id === presenterId) ?? null)
+      : null;
+
   const onlineCount = useMemo(
     () => state.roster.filter((p) => p.online).length,
     [state.roster],
@@ -294,6 +313,7 @@ function Room({
               isAdmin={isAdmin}
               gifsEnabled={gifsEnabled}
               pickerStyle={config?.pickerStyle ?? "wheel"}
+              layout={layout}
               retentionAt={state.retentionAt}
             />
             <LanguageToggle />
@@ -397,35 +417,56 @@ function Room({
           ) : (
             <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
               <div className="min-w-0 flex-1">
-                <BoardColumns
-                  columns={state.columns}
-                  notes={state.notes}
-                  columnCounts={state.columnCounts}
-                  roster={state.roster}
-                  you={you}
-                  phase={state.phase}
-                  editing={state.editing}
-                  isAdmin={isAdmin}
-                  presenterId={
-                    state.phase === "present"
-                      ? (state.picker?.current ?? null)
-                      : null
-                  }
-                  deciding={{
-                    voteActive: state.phase === "vote",
-                    mine: state.votes.mine,
-                    remaining: Math.max(
-                      0,
-                      (config?.votesPerPerson ?? 0) - usedVotes,
-                    ),
-                    maxPerTarget: config?.maxPerTarget ?? null,
-                    talliesShown,
-                    tallies: state.votes.tallies,
-                    topTargetIds: state.votes.topTargetIds,
-                    focusId: state.discussFocusId,
-                  }}
-                  gifsEnabled={gifsEnabled}
-                />
+                {surface === "canvas" ? (
+                  <BoardCanvas
+                    columns={state.columns}
+                    notes={state.notes}
+                    columnCounts={state.columnCounts}
+                    roster={state.roster}
+                    you={you}
+                    phase={state.phase}
+                    editing={state.editing}
+                    isAdmin={isAdmin}
+                    presenterId={presenterId}
+                    gifsEnabled={gifsEnabled}
+                  />
+                ) : surface === "focus" && presenter ? (
+                  <PresenterFocus
+                    notes={state.notes}
+                    columns={state.columns}
+                    roster={state.roster}
+                    you={you}
+                    phase={state.phase}
+                    isAdmin={isAdmin}
+                    presenter={presenter}
+                  />
+                ) : (
+                  <BoardColumns
+                    columns={state.columns}
+                    notes={state.notes}
+                    columnCounts={state.columnCounts}
+                    roster={state.roster}
+                    you={you}
+                    phase={state.phase}
+                    editing={state.editing}
+                    isAdmin={isAdmin}
+                    presenterId={presenterId}
+                    deciding={{
+                      voteActive: state.phase === "vote",
+                      mine: state.votes.mine,
+                      remaining: Math.max(
+                        0,
+                        (config?.votesPerPerson ?? 0) - usedVotes,
+                      ),
+                      maxPerTarget: config?.maxPerTarget ?? null,
+                      talliesShown,
+                      tallies: state.votes.tallies,
+                      topTargetIds: state.votes.topTargetIds,
+                      focusId: state.discussFocusId,
+                    }}
+                    gifsEnabled={gifsEnabled}
+                  />
+                )}
               </div>
               {showActions ? (
                 <ActionsPanel

@@ -37,6 +37,8 @@ function note(id: string, authorId: string, text: string): Note {
     text,
     gifUrl: null,
     order: 1,
+    x: null,
+    y: null,
     groupId: null,
     reactions: {},
   };
@@ -55,6 +57,7 @@ const sync: ServerEvent = {
     topN: 3,
     gifsEnabled: true,
     pickerStyle: "wheel",
+    layout: "columns",
   },
   phase: "write",
   timer: { endsAt: null, pausedRemainingMs: null },

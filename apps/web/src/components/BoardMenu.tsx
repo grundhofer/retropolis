@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import {
   EXPORT_FORMATS,
+  layoutModes,
   pickerStyles,
+  type LayoutMode,
   type PickerStyle,
 } from "@retropolis/shared";
 import { useConnection } from "../lib/connection.js";
@@ -18,6 +20,7 @@ export function BoardMenu({
   isAdmin,
   gifsEnabled,
   pickerStyle,
+  layout,
   retentionAt,
 }: {
   boardId: string;
@@ -25,6 +28,7 @@ export function BoardMenu({
   isAdmin: boolean;
   gifsEnabled: boolean;
   pickerStyle: PickerStyle;
+  layout: LayoutMode;
   retentionAt: number | null;
 }) {
   const { t } = useTranslation();
@@ -127,6 +131,29 @@ export function BoardMenu({
                 />
                 {t("menu.gifsEnabled")}
               </label>
+              <div className="mb-2">
+                <p className="mb-1 text-zinc-600">{t("menu.layout")}</p>
+                <div className="flex gap-1.5" role="group">
+                  {layoutModes.map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      data-testid={`layout-${mode}`}
+                      aria-pressed={layout === mode}
+                      onClick={() =>
+                        send({ type: "admin.layout.set", layout: mode })
+                      }
+                      className={`flex-1 rounded-lg border px-2 py-1 font-medium ${
+                        layout === mode
+                          ? "border-accent bg-accent/10 text-accent-strong"
+                          : "border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                      }`}
+                    >
+                      {t(`menu.layoutMode.${mode}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="mb-2">
                 <p className="mb-1 text-zinc-600">{t("menu.pickerStyle")}</p>
                 <div className="flex gap-1.5" role="group">
