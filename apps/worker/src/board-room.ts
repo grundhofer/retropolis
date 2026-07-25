@@ -37,6 +37,7 @@ import {
   type IcebreakerId,
   type Kudo,
   type KudoCardType,
+  type LayoutMode,
   ICEBREAKER_IDS,
   pickIcebreaker,
 } from "@retropolis/shared";
@@ -87,6 +88,8 @@ interface NoteRow {
   ord: number;
   group_id: string | null;
   gif_url: string | null;
+  pos_x: number | null;
+  pos_y: number | null;
 }
 
 export interface BoardCreation {
@@ -103,6 +106,9 @@ export interface BoardCreation {
   /** opt back into an otherwise-default flow (e.g. enable the check-in phase,
    *  which is off by default). Ignored when a full `config` is supplied. */
   phasePlan?: PhasePlan;
+  /** initial board layout ('columns' default); the facilitator can switch it
+   *  live afterwards. Ignored when a full `config` is supplied. */
+  layout?: LayoutMode;
   /** seeded when duplicating an existing board — structure only. Absent for a
    *  fresh board, which falls back to the built-in defaults. */
   config?: BoardConfig;
@@ -221,6 +227,13 @@ export class BoardRoom extends DurableObject<Env> {
     if (!noteColumns.includes("gif_url")) {
       this.sql.exec("ALTER TABLE notes ADD COLUMN gif_url TEXT");
     }
+    // Canvas position (normalized [0,1] within the note's zone); null = unplaced.
+    if (!noteColumns.includes("pos_x")) {
+      this.sql.exec("ALTER TABLE notes ADD COLUMN pos_x REAL");
+    }
+    if (!noteColumns.includes("pos_y")) {
+      this.sql.exec("ALTER TABLE notes ADD COLUMN pos_y REAL");
+    }
     const columnColumns = this.sql
       .exec("PRAGMA table_info(columns)")
       .toArray()
@@ -246,7 +259,7 @@ export class BoardRoom extends DurableObject<Env> {
       `INSERT INTO board_meta (key, value) VALUES
          ('id', ?), ('name', ?), ('adminToken', ?), ('createdAt', ?), ('seq', '0'),
          ('phase', 'lobby'), ('anonymous', ?), ('phasePlan', ?),
-         ('gifsEnabled', ?), ('pickerStyle', ?),
+         ('gifsEnabled', ?), ('pickerStyle', ?), ('layout', ?),
          ('votesPerPerson', ?), ('topN', ?), ('maxPerTarget', ?),
          ('retentionAt', ?), ('workingAgreements', ?)`,
       creation.boardId,
@@ -257,6 +270,7 @@ export class BoardRoom extends DurableObject<Env> {
       JSON.stringify(config?.phasePlan ?? creation.phasePlan ?? DEFAULT_PHASE_PLAN),
       config === undefined || config.gifsEnabled ? "1" : "0",
       config?.pickerStyle ?? "wheel",
+      config?.layout ?? creation.layout ?? "columns",
       String(config?.votesPerPerson ?? DEFAULT_VOTE_CONFIG.votesPerPerson),
       String(config?.topN ?? DEFAULT_VOTE_CONFIG.topN),
       maxPerTarget == null ? "" : String(maxPerTarget),
@@ -451,6 +465,9 @@ export class BoardRoom extends DurableObject<Env> {
         return;
       case "admin.picker.style":
         this.handlePickerStyleSet(ws, participant, command);
+        return;
+      case "admin.layout.set":
+        this.handleLayoutSet(ws, participant, command);
         return;
       case "admin.role.set":
         this.handleRoleSet(ws, participant, command);
@@ -828,7 +845,7 @@ export class BoardRoom extends DurableObject<Env> {
         .toArray()[0]?.next ?? 1,
     );
     this.sql.exec(
-      "INSERT INTO notes (id, column_id, author_id, text, ord, created_at, gif_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO notes (id, column_id, author_id, text, ord, created_at, gif_url, pos_x, pos_y) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       cmd.noteId,
       cmd.columnId,
       participant.id,
@@ -836,6 +853,8 @@ export class BoardRoom extends DurableObject<Env> {
       ord,
       Date.now(),
       this.sanitizeGifUrl(cmd.gifUrl) ?? null,
+      cmd.x ?? null,
+      cmd.y ?? null,
     );
     const note = this.noteById(cmd.noteId);
     if (note === null) return;
@@ -1645,8 +1664,30 @@ export class BoardRoom extends DurableObject<Env> {
       this.reject(ws, cmd.opId, "NOT_FOUND", "Column does not exist");
       return;
     }
-    if (note.column_id === cmd.columnId && note.group_id === null) {
+    // Column-mode no-op: same zone, ungrouped, and NOT a canvas reposition.
+    // (A grouped note dropped on its own column with x absent still falls
+    // through below — that is the column-mode drag-to-ungroup gesture.)
+    if (
+      note.column_id === cmd.columnId &&
+      note.group_id === null &&
+      cmd.x === undefined
+    ) {
       this.ack(ws, cmd.opId); // no-op
+      return;
+    }
+    // Canvas reposition within the SAME zone: persist x,y, KEEP ord and the
+    // stack (on the canvas a stack is split only via note.ungroup, never by a
+    // same-zone drag). Column membership and grouping are untouched.
+    if (note.column_id === cmd.columnId && cmd.x !== undefined) {
+      this.sql.exec(
+        "UPDATE notes SET pos_x = ?, pos_y = ? WHERE id = ?",
+        cmd.x,
+        cmd.y ?? null,
+        note.id,
+      );
+      const repositioned = this.noteById(note.id);
+      this.ack(ws, cmd.opId);
+      if (repositioned !== null) this.broadcastNoteReorg(repositioned);
       return;
     }
     const leftGroup = note.group_id;
@@ -1659,10 +1700,14 @@ export class BoardRoom extends DurableObject<Env> {
         )
         .toArray()[0]?.next ?? 1,
     );
+    // Cross-zone move (canvas or column). Canvas drops carry x,y for the new
+    // zone; column-mode moves omit them, which clears any stale position.
     this.sql.exec(
-      "UPDATE notes SET column_id = ?, ord = ?, group_id = NULL WHERE id = ?",
+      "UPDATE notes SET column_id = ?, ord = ?, group_id = NULL, pos_x = ?, pos_y = ? WHERE id = ?",
       cmd.columnId,
       ord,
+      cmd.x ?? null,
+      cmd.y ?? null,
       note.id,
     );
     const changed = [note.id];
@@ -2736,6 +2781,29 @@ export class BoardRoom extends DurableObject<Env> {
     });
   }
 
+  private handleLayoutSet(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.layout.set" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator changes settings",
+      );
+      return;
+    }
+    // Pure presentation over the same zones/notes — no note data changes.
+    this.setMeta("layout", cmd.layout);
+    this.broadcastAll({
+      type: "config.changed",
+      seq: this.nextSeq(),
+      config: this.config(),
+    });
+  }
+
   private async handleBoardKeep(
     ws: WebSocket,
     participant: ParticipantRow,
@@ -3364,6 +3432,8 @@ export class BoardRoom extends DurableObject<Env> {
       text: row.text,
       gifUrl: row.gif_url ?? null,
       order: Number(row.ord),
+      x: row.pos_x ?? null,
+      y: row.pos_y ?? null,
       groupId: row.group_id ?? null,
       reactions: reactionsByNote.get(row.id) ?? {},
     };
@@ -3410,6 +3480,8 @@ export class BoardRoom extends DurableObject<Env> {
       gifsEnabled: this.getMeta("gifsEnabled") !== "0",
       // Default to the classic wheel for boards created before the skin field.
       pickerStyle: this.getMeta("pickerStyle") === "slots" ? "slots" : "wheel",
+      // Default to columns for boards created before the layout field.
+      layout: this.getMeta("layout") === "canvas" ? "canvas" : "columns",
     };
   }
 

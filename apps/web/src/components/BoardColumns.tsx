@@ -677,6 +677,8 @@ function NoteComposer({
           text: trimmed,
           gifUrl,
           order,
+          x: null,
+          y: null,
           groupId: null,
           reactions: {},
         },

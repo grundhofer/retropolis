@@ -4,6 +4,7 @@ import {
   icebreakerIdSchema,
   workingAgreementsSchema,
 } from "./domain/icebreakers.js";
+import { layoutModeSchema } from "./domain/layout.js";
 import { phasePlanSchema, phaseSchema } from "./domain/phases.js";
 import {
   pickerStateSchema,
@@ -53,6 +54,9 @@ export const boardConfigSchema = z.object({
   /** who-presents-next picker skin — pure presentation, same server draw.
    *  Defaulted so boards created before the field parse as the classic wheel. */
   pickerStyle: pickerStyleSchema.default("wheel"),
+  /** board layout: classic columns or a freeform canvas of the same zones.
+   *  Defaulted so boards created before the field parse as columns. */
+  layout: layoutModeSchema.default("columns"),
 });
 export type BoardConfig = z.infer<typeof boardConfigSchema>;
 
@@ -95,6 +99,11 @@ export const noteSchema = z.object({
   text: z.string(),
   gifUrl: gifUrlSchema.nullable(),
   order: z.number(),
+  // canvas position: normalized [0,1] fraction WITHIN the note's own zone
+  // (columnId stays authoritative). null = unplaced; ignored in column mode.
+  // Defaulted so pre-canvas payloads parse.
+  x: z.number().min(0).max(1).nullable().default(null),
+  y: z.number().min(0).max(1).nullable().default(null),
   // notes sharing a groupId form a stack (merged duplicates)
   groupId: hexIdSchema.nullable(),
   // emoji -> participant ids
@@ -179,6 +188,9 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     columnId: hexIdSchema,
     text: noteTextSchema,
     gifUrl: gifUrlSchema.nullable().optional(),
+    // canvas placement (omitted in column mode)
+    x: z.number().min(0).max(1).optional(),
+    y: z.number().min(0).max(1).optional(),
   }),
   z.object({
     type: z.literal("note.update"),
@@ -217,6 +229,10 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     opId: hexIdSchema,
     noteId: hexIdSchema,
     columnId: hexIdSchema,
+    // present = a canvas reposition (persist x,y); absent = a column-mode move
+    // (position is cleared). Same-zone drops with x set keep the stack.
+    x: z.number().min(0).max(1).optional(),
+    y: z.number().min(0).max(1).optional(),
   }),
 
   z.object({ type: z.literal("admin.phase.set"), phase: phaseSchema }),
@@ -309,6 +325,12 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("admin.picker.style"),
     style: pickerStyleSchema,
+  }),
+  // Switch the board between classic columns and the freeform canvas — pure
+  // presentation over the same zones/notes (mirrors admin.picker.style).
+  z.object({
+    type: z.literal("admin.layout.set"),
+    layout: layoutModeSchema,
   }),
   z.object({
     type: z.literal("admin.picker.exclude"),

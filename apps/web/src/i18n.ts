@@ -15,6 +15,12 @@ const resources = {
         boardName: "Board name",
         boardNamePlaceholder: "Sprint 42 retro",
         template: "Template",
+        layout: "Layout",
+        layoutMode: { columns: "Columns", canvas: "Canvas" },
+        layoutHint: {
+          columns: "Classic lists — one column per topic.",
+          canvas: "A freeform board — place notes anywhere in each zone.",
+        },
         create: "Create board",
         creating: "Creating…",
         createFailed: "Creating the board failed. Please try again.",
@@ -131,6 +137,17 @@ const resources = {
         donePresenting: "Done presenting",
         waiting: "The facilitator is leading the round",
       },
+      canvas: {
+        hint: "Double-click to add a note",
+      },
+      present: {
+        focus: {
+          heading: "{{name}} is presenting",
+          count_one: "{{count}} card",
+          count_other: "{{count}} cards",
+          empty: "No cards in this zone.",
+        },
+      },
       group: {
         ungroup: "Unstack note",
       },
@@ -194,6 +211,11 @@ const resources = {
         includeAuthors: "Include author names",
         settings: "Board settings",
         gifsEnabled: "Allow GIFs",
+        layout: "Board layout",
+        layoutMode: {
+          columns: "Columns",
+          canvas: "Canvas",
+        },
         pickerStyle: "Picker style",
         picker: {
           wheel: "Wheel",
@@ -288,6 +310,12 @@ const resources = {
         boardName: "Name des Boards",
         boardNamePlaceholder: "Sprint-42-Retro",
         template: "Vorlage",
+        layout: "Layout",
+        layoutMode: { columns: "Spalten", canvas: "Canvas" },
+        layoutHint: {
+          columns: "Klassische Listen — eine Spalte pro Thema.",
+          canvas: "Ein freies Board — Notizen frei in jeder Zone platzieren.",
+        },
         create: "Board erstellen",
         creating: "Wird erstellt…",
         createFailed:
@@ -405,6 +433,17 @@ const resources = {
         donePresenting: "Fertig mit Vorstellen",
         waiting: "Die Moderation führt durch die Runde",
       },
+      canvas: {
+        hint: "Doppelklick zum Hinzufügen",
+      },
+      present: {
+        focus: {
+          heading: "{{name}} stellt vor",
+          count_one: "{{count}} Karte",
+          count_other: "{{count}} Karten",
+          empty: "Keine Karten in dieser Zone.",
+        },
+      },
       group: {
         ungroup: "Aus Stapel lösen",
       },
@@ -469,6 +508,11 @@ const resources = {
         includeAuthors: "Namen der Autor:innen einschließen",
         settings: "Board-Einstellungen",
         gifsEnabled: "GIFs erlauben",
+        layout: "Board-Layout",
+        layoutMode: {
+          columns: "Spalten",
+          canvas: "Canvas",
+        },
         pickerStyle: "Auswahl-Stil",
         picker: {
           wheel: "Glücksrad",
