@@ -143,6 +143,7 @@ const resources = {
         zoomIn: "Zoom in",
         zoomOut: "Zoom out",
         fit: "Fit to screen",
+        resize: "Resize zone",
       },
       present: {
         focus: {
@@ -215,6 +216,7 @@ const resources = {
         includeAuthors: "Include author names",
         settings: "Board settings",
         gifsEnabled: "Allow GIFs",
+        cursorsEnabled: "Live cursors (uses more resources)",
         layout: "Board layout",
         layoutMode: {
           columns: "Columns",
@@ -443,6 +445,7 @@ const resources = {
         zoomIn: "Vergrößern",
         zoomOut: "Verkleinern",
         fit: "An Fenster anpassen",
+        resize: "Zone skalieren",
       },
       present: {
         focus: {
@@ -516,6 +519,7 @@ const resources = {
         includeAuthors: "Namen der Autor:innen einschließen",
         settings: "Board-Einstellungen",
         gifsEnabled: "GIFs erlauben",
+        cursorsEnabled: "Live-Cursor (mehr Ressourcen)",
         layout: "Board-Layout",
         layoutMode: {
           columns: "Spalten",

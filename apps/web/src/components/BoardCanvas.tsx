@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   clampUnit,
+  clampZoneRect,
+  defaultZoneRect,
   generateHexId,
   scatterPos,
   type Column,
@@ -9,6 +11,7 @@ import {
   type Participant,
   type Phase,
   type ServerEvent,
+  type ZoneRect,
 } from "@retropolis/shared";
 import { useConnection } from "../lib/connection.js";
 import { NoteCard } from "./NoteCard.js";
@@ -24,6 +27,10 @@ export interface BoardCanvasProps {
   isAdmin: boolean;
   presenterId: string | null;
   gifsEnabled: boolean;
+  /** other participants' live cursors (normalized world position) — only ever
+   *  populated while cursorsEnabled */
+  cursors: Record<string, { x: number; y: number }>;
+  cursorsEnabled: boolean;
 }
 
 interface DragState {
@@ -33,25 +40,37 @@ interface DragState {
   dy: number;
 }
 
+interface ZoneDrag {
+  columnId: string;
+  mode: "move" | "resize";
+  pointerId: number;
+  orig: ZoneRect;
+  startX: number;
+  startY: number;
+  rect: ZoneRect;
+}
+
 interface View {
   zoom: number;
   panX: number;
   panY: number;
 }
 
-const ZONE_H = 720; // px — a tall zone gives room to spread, so zoom/pan earn their keep
-const MIN_ZOOM = 0.3;
+// A fixed logical world the zones live on; the viewport zooms/pans over it.
+const WORLD_W = 1600;
+const WORLD_H = 1000;
+const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 
 function clampZoom(z: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 }
 
-// Freeform board: each zone is a column; notes are placed anywhere inside their
-// zone by a normalized (x,y). Dragging is smooth LOCALLY (a CSS transform) and
-// commits exactly ONE note.move on pointer-up — never per-frame — so the canvas
-// costs no more on the wire than a classic column drag (free-tier sacred). The
-// whole board sits in a zoom/pan viewport (view state is local, no wire cost).
+// Freeform board: each zone is a column, freely placed/sized on a fixed world;
+// notes are placed anywhere inside their zone by a normalized (x,y). Dragging a
+// card commits exactly ONE note.move on pointer-up — never per-frame — so the
+// canvas costs no more on the wire than a classic column drag (free-tier
+// sacred). Moving/sizing a zone likewise commits one admin.column.setRect.
 export function BoardCanvas({
   columns,
   notes,
@@ -61,13 +80,16 @@ export function BoardCanvas({
   phase,
   isAdmin,
   presenterId,
+  cursors,
+  cursorsEnabled,
 }: BoardCanvasProps) {
   const { t } = useTranslation();
-  const { mutate } = useConnection();
+  const { mutate, send } = useConnection();
   const viewportRef = useRef<HTMLDivElement>(null);
-  const worldRef = useRef<HTMLDivElement>(null);
+  const lastCursorAt = useRef(0);
   const zoneRefs = useRef<Map<string, HTMLElement>>(new Map());
   const dragOrigin = useRef({ x: 0, y: 0 });
+  const zoneDragRef = useRef<ZoneDrag | null>(null);
   const panning = useRef<{
     pointerId: number;
     startX: number;
@@ -77,6 +99,7 @@ export function BoardCanvas({
     active: boolean;
   } | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [zoneDrag, setZoneDrag] = useState<ZoneDrag | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, panX: 0, panY: 0 });
   const [composing, setComposing] = useState<{
     columnId: string;
@@ -84,22 +107,32 @@ export function BoardCanvas({
     y: number;
   } | null>(null);
 
+  const ordered = [...columns].sort((a, b) => a.order - b.order);
+  function rectOf(column: Column): ZoneRect {
+    if (zoneDrag?.columnId === column.id) return zoneDrag.rect;
+    if (column.rect) return column.rect;
+    return defaultZoneRect(
+      ordered.findIndex((c) => c.id === column.id),
+      ordered.length,
+    );
+  }
+
   function fitView() {
     const vp = viewportRef.current;
-    const world = worldRef.current;
-    if (!vp || !world) return;
-    // measure at scale 1 (scrollWidth/Height are layout-box sizes, transform-free)
-    const worldH = world.scrollHeight;
-    const worldW = world.scrollWidth;
-    const zoom = clampZoom(Math.min(1, (vp.clientHeight - 24) / worldH));
+    if (!vp) return;
+    const zoom = clampZoom(
+      Math.min(
+        (vp.clientWidth - 24) / WORLD_W,
+        (vp.clientHeight - 24) / WORLD_H,
+      ),
+    );
     setView({
       zoom,
-      panX: Math.max(0, (vp.clientWidth - worldW * zoom) / 2),
-      panY: 12,
+      panX: (vp.clientWidth - WORLD_W * zoom) / 2,
+      panY: (vp.clientHeight - WORLD_H * zoom) / 2,
     });
   }
 
-  // Start fitted so the whole board is visible; the user zooms in to read.
   const didFit = useRef(false);
   useLayoutEffect(() => {
     if (didFit.current) return;
@@ -151,10 +184,10 @@ export function BoardCanvas({
   function onViewportPointerDown(event: React.PointerEvent) {
     if (
       (event.target as HTMLElement).closest(
-        "[data-testid='note-card'], [data-testid='canvas-composer'], [data-canvas-control]",
+        "[data-testid='note-card'], [data-testid='canvas-composer'], [data-canvas-control], [data-zone-handle]",
       )
     ) {
-      return; // a card / composer / control interaction, not a pan
+      return;
     }
     panning.current = {
       pointerId: event.pointerId,
@@ -166,25 +199,112 @@ export function BoardCanvas({
     };
   }
   function onViewportPointerMove(event: React.PointerEvent) {
+    // Broadcast our cursor (throttled ~5Hz) while cursors are enabled — the
+    // ONLY continuous stream on the board, and it runs only when opted in.
+    if (cursorsEnabled && event.timeStamp - lastCursorAt.current > 200) {
+      const vp = viewportRef.current;
+      if (vp) {
+        const rect = vp.getBoundingClientRect();
+        lastCursorAt.current = event.timeStamp;
+        send({
+          type: "presence.cursor",
+          x: clampUnit(
+            (event.clientX - rect.left - view.panX) / (view.zoom * WORLD_W),
+          ),
+          y: clampUnit(
+            (event.clientY - rect.top - view.panY) / (view.zoom * WORLD_H),
+          ),
+        });
+      }
+    }
+    // A zone move/resize in flight takes priority over panning.
+    const zd = zoneDragRef.current;
+    if (zd && event.pointerId === zd.pointerId) {
+      const dxFrac = (event.clientX - zd.startX) / (WORLD_W * view.zoom);
+      const dyFrac = (event.clientY - zd.startY) / (WORLD_H * view.zoom);
+      const rect =
+        zd.mode === "move"
+          ? { ...zd.orig, x: zd.orig.x + dxFrac, y: zd.orig.y + dyFrac }
+          : { ...zd.orig, w: zd.orig.w + dxFrac, h: zd.orig.h + dyFrac };
+      const clamped = clampZoneRect(rect);
+      zoneDragRef.current = { ...zd, rect: clamped };
+      setZoneDrag(zoneDragRef.current);
+      return;
+    }
     const pan = panning.current;
     if (!pan || event.pointerId !== pan.pointerId) return;
     const dx = event.clientX - pan.startX;
     const dy = event.clientY - pan.startY;
-    // Only begin panning past a small threshold, so a click / double-click to
-    // drop a note is never swallowed (and capture doesn't eat the dblclick).
     if (!pan.active) {
       if (Math.hypot(dx, dy) < 4) return;
       pan.active = true;
       try {
         event.currentTarget.setPointerCapture(pan.pointerId);
       } catch {
-        // capture may be rejected for synthetic pointers — pan still works
+        // synthetic pointers may reject capture — pan still works
       }
     }
     setView((v) => ({ ...v, panX: pan.panX + dx, panY: pan.panY + dy }));
   }
   function onViewportPointerUp(event: React.PointerEvent) {
+    const zd = zoneDragRef.current;
+    if (zd && event.pointerId === zd.pointerId) {
+      zoneDragRef.current = null;
+      setZoneDrag(null);
+      const column = columns.find((c) => c.id === zd.columnId);
+      const original = column?.rect ?? null;
+      // Only commit a real change.
+      if (
+        original === null ||
+        original.x !== zd.rect.x ||
+        original.y !== zd.rect.y ||
+        original.w !== zd.rect.w ||
+        original.h !== zd.rect.h
+      ) {
+        mutate(
+          {
+            type: "admin.column.setRect",
+            opId: generateHexId(),
+            columnId: zd.columnId,
+            rect: zd.rect,
+          },
+          column
+            ? {
+                type: "column.updated",
+                seq: 0,
+                column: { ...column, rect: zd.rect },
+              }
+            : [],
+        );
+      }
+      return;
+    }
     if (panning.current?.pointerId === event.pointerId) panning.current = null;
+  }
+
+  function beginZoneDrag(
+    event: React.PointerEvent,
+    column: Column,
+    mode: "move" | "resize",
+  ) {
+    if (!isAdmin) return;
+    event.stopPropagation();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // synthetic pointers may reject capture
+    }
+    const start: ZoneDrag = {
+      columnId: column.id,
+      mode,
+      pointerId: event.pointerId,
+      orig: rectOf(column),
+      startX: event.clientX,
+      startY: event.clientY,
+      rect: rectOf(column),
+    };
+    zoneDragRef.current = start;
+    setZoneDrag(start);
   }
 
   // --- dragging a card (commit-on-drop; free-tier sacred) ---
@@ -202,11 +322,11 @@ export function BoardCanvas({
     if ((event.target as HTMLElement).closest("button, textarea, input, a")) {
       return;
     }
-    event.stopPropagation(); // don't also start a board pan
+    event.stopPropagation();
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
-      // synthetic pointers may reject capture; drag still works
+      // synthetic pointers may reject capture — drag still works
     }
     dragOrigin.current = { x: event.clientX, y: event.clientY };
     setDrag({ noteId: note.id, pointerId: event.pointerId, dx: 0, dy: 0 });
@@ -225,7 +345,7 @@ export function BoardCanvas({
     const { clientX, clientY } = event;
     let target: { columnId: string; x: number; y: number } | null = null;
     for (const [columnId, el] of zoneRefs.current) {
-      const rect = el.getBoundingClientRect(); // on-screen rect ⇒ zoom/pan-safe
+      const rect = el.getBoundingClientRect(); // on-screen ⇒ zoom/pan-safe
       if (
         clientX >= rect.left &&
         clientX <= rect.right &&
@@ -240,7 +360,7 @@ export function BoardCanvas({
         break;
       }
     }
-    if (target === null) return; // dropped outside any zone → snap back
+    if (target === null) return;
     if (
       target.columnId === note.columnId &&
       note.x === target.x &&
@@ -310,8 +430,8 @@ export function BoardCanvas({
     );
   }
 
-  // Tidy: arrange the cards you can move into a neat per-zone grid — in ONE
-  // note.moveMany frame (never a loop of note.move: inbound frames bill 20:1).
+  // Tidy: arrange the movable cards into a per-zone grid — ONE note.moveMany
+  // frame (never a loop of note.move: inbound frames bill 20:1).
   function tidy() {
     const byZone = new Map<string, Note[]>();
     for (const note of notes) {
@@ -327,15 +447,13 @@ export function BoardCanvas({
       y: number;
     }> = [];
     const echoes: ServerEvent[] = [];
-    // A card is 11rem (176px) wide; fit as many columns as the zone's actual
-    // width allows (≥192px per slot) so tidied cards never overlap.
     const CARD_SLOT = 192;
     for (const [columnId, zoneNotes] of byZone) {
       zoneNotes.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
       const zoneEl = zoneRefs.current.get(columnId);
       const zoneW = zoneEl
         ? zoneEl.getBoundingClientRect().width / view.zoom
-        : 260;
+        : 320;
       const cols = Math.max(
         1,
         Math.min(zoneNotes.length, Math.floor(zoneW / CARD_SLOT)),
@@ -410,15 +528,16 @@ export function BoardCanvas({
         style={{ touchAction: "none" }}
       >
         <div
-          ref={worldRef}
-          className="absolute top-0 left-0 grid w-full items-stretch gap-4 p-1"
+          className="absolute top-0 left-0"
           style={{
-            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            width: WORLD_W,
+            height: WORLD_H,
             transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`,
             transformOrigin: "0 0",
           }}
         >
-          {columns.map((column) => {
+          {ordered.map((column) => {
+            const rect = rectOf(column);
             const zoneNotes = notes.filter((n) => n.columnId === column.id);
             const othersCount =
               phase === "write"
@@ -428,12 +547,27 @@ export function BoardCanvas({
               <section
                 key={column.id}
                 aria-label={column.name}
-                className={`flex flex-col rounded-2xl border border-zinc-200 bg-white/60 ${
+                className={`absolute flex flex-col rounded-2xl border border-zinc-200 bg-white/60 ${
                   column.hidden ? "opacity-60" : ""
-                }`}
-                style={{ height: ZONE_H }}
+                } ${zoneDrag?.columnId === column.id ? "ring-2 ring-accent/40" : ""}`}
+                style={{
+                  left: rect.x * WORLD_W,
+                  top: rect.y * WORLD_H,
+                  width: rect.w * WORLD_W,
+                  height: rect.h * WORLD_H,
+                }}
               >
-                <header className="flex items-center gap-1.5 px-3 pt-2.5 pb-1.5">
+                <header
+                  data-zone-handle={isAdmin ? "" : undefined}
+                  onPointerDown={
+                    isAdmin
+                      ? (event) => beginZoneDrag(event, column, "move")
+                      : undefined
+                  }
+                  className={`flex items-center gap-1.5 px-3 pt-2.5 pb-1.5 ${
+                    isAdmin ? "cursor-move" : ""
+                  }`}
+                >
                   <h2 className="flex-1 truncate text-sm font-semibold tracking-wide text-zinc-600 uppercase">
                     {column.name}
                     {column.hidden ? (
@@ -472,11 +606,11 @@ export function BoardCanvas({
                     ) {
                       return;
                     }
-                    const rect = event.currentTarget.getBoundingClientRect();
+                    const box = event.currentTarget.getBoundingClientRect();
                     setComposing({
                       columnId: column.id,
-                      x: clampUnit((event.clientX - rect.left) / rect.width),
-                      y: clampUnit((event.clientY - rect.top) / rect.height),
+                      x: clampUnit((event.clientX - box.left) / box.width),
+                      y: clampUnit((event.clientY - box.top) / box.height),
                     });
                   }}
                   className="relative flex-1 overflow-hidden rounded-b-2xl"
@@ -551,9 +685,66 @@ export function BoardCanvas({
                     </p>
                   ) : null}
                 </div>
+
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    data-zone-handle=""
+                    aria-label={t("canvas.resize")}
+                    onPointerDown={(event) =>
+                      beginZoneDrag(event, column, "resize")
+                    }
+                    className="absolute right-0 bottom-0 size-5 cursor-nwse-resize rounded-br-2xl text-zinc-300 hover:text-zinc-500"
+                    style={{ touchAction: "none" }}
+                  >
+                    ⤡
+                  </button>
+                ) : null}
               </section>
             );
           })}
+
+          {cursorsEnabled
+            ? roster.map((p) => {
+                if (p.id === you.id) return null;
+                const c = cursors[p.id];
+                if (!c) return null;
+                return (
+                  <div
+                    key={p.id}
+                    data-testid="live-cursor"
+                    className="pointer-events-none absolute z-40"
+                    style={{
+                      left: c.x * WORLD_W,
+                      top: c.y * WORLD_H,
+                      // counter the world scale so cursors stay a readable size
+                      transform: `scale(${1 / view.zoom})`,
+                      transformOrigin: "0 0",
+                    }}
+                  >
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      className="drop-shadow"
+                    >
+                      <path
+                        d="M1 1 L1 13 L4.5 9.5 L7 15 L9 14 L6.5 8.5 L11.5 8.5 Z"
+                        fill={p.color}
+                        stroke="white"
+                        strokeWidth="1"
+                      />
+                    </svg>
+                    <span
+                      className="-mt-1 ml-3 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-white"
+                      style={{ backgroundColor: p.color }}
+                    >
+                      {p.name}
+                    </span>
+                  </div>
+                );
+              })
+            : null}
         </div>
       </div>
     </div>

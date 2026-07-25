@@ -5,6 +5,14 @@ import type { Phase } from "./phases.js";
 // freeform canvas where notes are placed into labelled zones. A "zone" is just
 // a column — so voting, grouping, export and the write-phase privacy filter all
 // keep working unchanged; canvas only adds a per-note position.
+// Master gate for live cursors. FALSE = the feature is fully built but cannot
+// be activated at all: the client never sends/renders cursors, the settings
+// toggle is hidden, and the server refuses to enable them. Flip to true (one
+// line) to make cursors reachable again — only when the Cloudflare free-tier
+// cost is acceptable (a paid plan or bounded usage), since cursor streams bill
+// inbound frames 20:1.
+export const CURSORS_ACTIVATABLE = false;
+
 export const layoutModes = ["columns", "canvas"] as const;
 export const layoutModeSchema = z.enum(layoutModes);
 export type LayoutMode = z.infer<typeof layoutModeSchema>;
@@ -60,5 +68,37 @@ export function scatterPos(noteId: string): { x: number; y: number } {
   return {
     x: margin + ((hash & 0xffff) / 0xffff) * span,
     y: margin + (((hash >>> 16) & 0xffff) / 0xffff) * span,
+  };
+}
+
+// A zone (column) can be freely placed/sized on the canvas. Its rectangle is
+// normalized [0,1] fractions of a fixed logical world; null = "auto", laid out
+// in a row by defaultZoneRect. columnId stays authoritative — rect is only how
+// the zone is drawn on a canvas board (ignored in column mode).
+export const zoneRectSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0.05).max(1),
+  h: z.number().min(0.05).max(1),
+});
+export type ZoneRect = z.infer<typeof zoneRectSchema>;
+
+// Default placement for a zone with no stored rect: an even row across the
+// world, so a board that never customized still reads like tidy columns.
+export function defaultZoneRect(index: number, count: number): ZoneRect {
+  const n = Math.max(1, count);
+  const gap = 0.015;
+  const w = (1 - gap * (n + 1)) / n;
+  return { x: gap + index * (w + gap), y: 0.02, w, h: 0.96 };
+}
+
+export function clampZoneRect(rect: ZoneRect): ZoneRect {
+  const w = Math.min(1, Math.max(0.05, rect.w));
+  const h = Math.min(1, Math.max(0.05, rect.h));
+  return {
+    w,
+    h,
+    x: Math.min(1, Math.max(0, rect.x)),
+    y: Math.min(1, Math.max(0, rect.y)),
   };
 }
