@@ -408,6 +408,70 @@ describe("canvas layout & positions", () => {
     expect(moved.note.groupId).toBeNull();
   });
 
+  it("facilitator moves/sizes a zone; members get the new rect; members cannot", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    const ben = await joined(boardId, "Ben");
+    const columnId = admin.sync.columns[0]?.id;
+    if (!columnId) throw new Error("setup");
+    expect(admin.sync.columns[0]?.rect).toBeNull(); // default = auto layout
+
+    admin.socket.send({
+      type: "admin.column.setRect",
+      opId: opId(),
+      columnId,
+      rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
+    });
+    const updated = await ben.socket.waitFor(
+      (e) =>
+        e.type === "column.updated" &&
+        e.column.id === columnId &&
+        e.column.rect !== null,
+    );
+    if (updated.type !== "column.updated") throw new Error("unreachable");
+    expect(updated.column.rect).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+
+    ben.socket.send({
+      type: "admin.column.setRect",
+      opId: opId(),
+      columnId,
+      rect: { x: 0, y: 0, w: 0.5, h: 0.5 },
+    });
+    const rejected = await ben.socket.waitFor((e) => e.type === "reject");
+    if (rejected.type !== "reject") throw new Error("unreachable");
+    expect(rejected.code).toBe("NOT_ADMIN");
+  });
+
+  it("live cursors: off by default, dropped while off, and activation is disabled", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    const ben = await joined(boardId, "Ben");
+    expect(admin.sync.config.cursorsEnabled).toBe(false);
+
+    // Off → a cursor frame is dropped entirely (free-tier gate).
+    ben.socket.send({ type: "presence.cursor", x: 0.5, y: 0.5 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(
+      admin.socket.events.some((e) => e.type === "presence.cursor"),
+    ).toBe(false);
+
+    // Members cannot toggle settings.
+    ben.socket.send({ type: "admin.cursors.set", enabled: true });
+    const memberReject = await ben.socket.waitFor((e) => e.type === "reject");
+    if (memberReject.type !== "reject") throw new Error("unreachable");
+    expect(memberReject.code).toBe("NOT_ADMIN");
+
+    // Activation is currently disabled — even the facilitator cannot enable them.
+    admin.socket.send({ type: "admin.cursors.set", enabled: true });
+    const adminReject = await admin.socket.waitFor((e) => e.type === "reject");
+    if (adminReject.type !== "reject") throw new Error("unreachable");
+    expect(adminReject.code).toBe("INVALID");
+
+    // The config is untouched — cursors stay off for a fresh joiner too.
+    const cara = await joined(boardId, "Cara");
+    expect(cara.sync.config.cursorsEnabled).toBe(false);
+  });
+
   it("note.moveMany repositions many cards in ONE frame", async () => {
     const { boardId, adminToken } = await createBoard();
     const admin = await joined(boardId, "Anna", adminToken);

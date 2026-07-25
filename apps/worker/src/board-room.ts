@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   canTransition,
+  CURSORS_ACTIVATABLE,
   DEFAULT_PHASE_PLAN,
   DEFAULT_VOTE_CONFIG,
   EMPTY_PICKER,
@@ -38,6 +39,7 @@ import {
   type Kudo,
   type KudoCardType,
   type LayoutMode,
+  type ZoneRect,
   ICEBREAKER_IDS,
   pickIcebreaker,
 } from "@retropolis/shared";
@@ -101,6 +103,7 @@ export interface BoardCreation {
     name: string;
     order: number;
     hidden?: boolean;
+    rect?: ZoneRect | null;
   }>;
   workingAgreements: string;
   /** opt back into an otherwise-default flow (e.g. enable the check-in phase,
@@ -151,7 +154,8 @@ export class BoardRoom extends DurableObject<Env> {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         ord INTEGER NOT NULL,
-        hidden INTEGER NOT NULL DEFAULT 0
+        hidden INTEGER NOT NULL DEFAULT 0,
+        rect_x REAL, rect_y REAL, rect_w REAL, rect_h REAL
       );
       CREATE TABLE IF NOT EXISTS notes (
         id TEXT PRIMARY KEY,
@@ -243,6 +247,12 @@ export class BoardRoom extends DurableObject<Env> {
         "ALTER TABLE columns ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
       );
     }
+    // Freeform zone rectangle (nullable = auto row layout).
+    for (const col of ["rect_x", "rect_y", "rect_w", "rect_h"]) {
+      if (!columnColumns.includes(col)) {
+        this.sql.exec(`ALTER TABLE columns ADD COLUMN ${col} REAL`);
+      }
+    }
   }
 
   // Called once by the Worker when a board is created (RPC).
@@ -260,6 +270,7 @@ export class BoardRoom extends DurableObject<Env> {
          ('id', ?), ('name', ?), ('adminToken', ?), ('createdAt', ?), ('seq', '0'),
          ('phase', 'lobby'), ('anonymous', ?), ('phasePlan', ?),
          ('gifsEnabled', ?), ('pickerStyle', ?), ('layout', ?),
+         ('cursorsEnabled', ?),
          ('votesPerPerson', ?), ('topN', ?), ('maxPerTarget', ?),
          ('retentionAt', ?), ('workingAgreements', ?)`,
       creation.boardId,
@@ -271,6 +282,7 @@ export class BoardRoom extends DurableObject<Env> {
       config === undefined || config.gifsEnabled ? "1" : "0",
       config?.pickerStyle ?? "wheel",
       config?.layout ?? creation.layout ?? "columns",
+      config?.cursorsEnabled ? "1" : "0",
       String(config?.votesPerPerson ?? DEFAULT_VOTE_CONFIG.votesPerPerson),
       String(config?.topN ?? DEFAULT_VOTE_CONFIG.topN),
       maxPerTarget == null ? "" : String(maxPerTarget),
@@ -279,11 +291,15 @@ export class BoardRoom extends DurableObject<Env> {
     );
     for (const column of creation.columns) {
       this.sql.exec(
-        "INSERT INTO columns (id, name, ord, hidden) VALUES (?, ?, ?, ?)",
+        "INSERT INTO columns (id, name, ord, hidden, rect_x, rect_y, rect_w, rect_h) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         column.id,
         column.name,
         column.order,
         column.hidden ? 1 : 0,
+        column.rect?.x ?? null,
+        column.rect?.y ?? null,
+        column.rect?.w ?? null,
+        column.rect?.h ?? null,
       );
     }
     // Auto-delete after the retention window (GDPR / decided). The DO's single
@@ -306,7 +322,12 @@ export class BoardRoom extends DurableObject<Env> {
   // OR the token is wrong (no existence/auth oracle beyond the id capability).
   async duplicationSnapshot(adminToken: string): Promise<{
     name: string;
-    columns: Array<{ name: string; order: number; hidden: boolean }>;
+    columns: Array<{
+      name: string;
+      order: number;
+      hidden: boolean;
+      rect: ZoneRect | null;
+    }>;
     config: BoardConfig;
     workingAgreements: string;
   } | null> {
@@ -327,6 +348,7 @@ export class BoardRoom extends DurableObject<Env> {
         name: c.name,
         order: c.order,
         hidden: c.hidden,
+        rect: c.rect,
       })),
       config: this.config(),
       workingAgreements: this.getMeta("workingAgreements") ?? "",
@@ -438,6 +460,9 @@ export class BoardRoom extends DurableObject<Env> {
       case "admin.column.setHidden":
         this.handleColumn(ws, participant, command);
         return;
+      case "admin.column.setRect":
+        this.handleColumnSetRect(ws, participant, command);
+        return;
       case "note.group":
         this.handleNoteGroup(ws, participant, command);
         return;
@@ -497,6 +522,12 @@ export class BoardRoom extends DurableObject<Env> {
         return;
       case "admin.gifs.set":
         this.handleGifsSet(ws, participant, command);
+        return;
+      case "admin.cursors.set":
+        this.handleCursorsSet(ws, participant, command);
+        return;
+      case "presence.cursor":
+        this.handleCursor(ws, participant, command);
         return;
       case "admin.board.keep":
         void this.handleBoardKeep(ws, participant);
@@ -1449,6 +1480,41 @@ export class BoardRoom extends DurableObject<Env> {
     // them); recompute any revealed tallies/crowns so they never reference a
     // hidden note.
     this.reconcileAfterVoteMutation();
+  }
+
+  // Move/resize a zone on the canvas (facilitator only). Pure layout — the
+  // notes are untouched; committed once on drop.
+  private handleColumnSetRect(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.column.setRect" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(ws, cmd.opId, "NOT_ADMIN", "Only the facilitator moves zones");
+      return;
+    }
+    const column = this.columnById(cmd.columnId);
+    if (column === null) {
+      this.reject(ws, cmd.opId, "NOT_FOUND", "Column does not exist");
+      return;
+    }
+    const rect = cmd.rect;
+    this.sql.exec(
+      "UPDATE columns SET rect_x = ?, rect_y = ?, rect_w = ?, rect_h = ? WHERE id = ?",
+      rect.x,
+      rect.y,
+      rect.w,
+      rect.h,
+      cmd.columnId,
+    );
+    const seq = this.nextSeq();
+    this.ack(ws, cmd.opId, seq);
+    // A hidden zone's geometry must not reach members (mirror setHidden).
+    this.broadcastColumnEvent({
+      type: "column.updated",
+      seq,
+      column: { ...column, rect },
+    });
   }
 
   // A column-bearing event goes to everyone when the column is visible, but only
@@ -2815,6 +2881,60 @@ export class BoardRoom extends DurableObject<Env> {
     });
   }
 
+  private handleCursorsSet(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "admin.cursors.set" }>,
+  ): void {
+    if (participant.role !== "facilitator") {
+      this.reject(
+        ws,
+        undefined,
+        "NOT_ADMIN",
+        "Only the facilitator changes settings",
+      );
+      return;
+    }
+    // Activation is hard-disabled for now — cursors are prepared but must not
+    // be turnable on (they would bill the free tier). Disabling stays allowed.
+    if (cmd.enabled && !CURSORS_ACTIVATABLE) {
+      this.reject(
+        ws,
+        undefined,
+        "INVALID",
+        "Live cursors are not available yet",
+      );
+      return;
+    }
+    this.setMeta("cursorsEnabled", cmd.enabled ? "1" : "0");
+    this.broadcastAll({
+      type: "config.changed",
+      seq: this.nextSeq(),
+      config: this.config(),
+    });
+  }
+
+  // Fire-and-forget cursor presence. Dropped ENTIRELY unless the facilitator
+  // enabled cursors (continuous streams would break the free tier) — the gate
+  // lives on the server so a rogue client can't stream cursors on a board that
+  // opted out. Never persisted; broadcast to everyone but the sender.
+  private handleCursor(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "presence.cursor" }>,
+  ): void {
+    if (this.getMeta("cursorsEnabled") !== "1") return;
+    this.broadcastAll(
+      {
+        type: "presence.cursor",
+        participantId: participant.id,
+        x: cmd.x,
+        y: cmd.y,
+      },
+      ws,
+    );
+  }
+
   private handlePickerStyleSet(
     ws: WebSocket,
     participant: ParticipantRow,
@@ -3539,6 +3659,9 @@ export class BoardRoom extends DurableObject<Env> {
       pickerStyle: this.getMeta("pickerStyle") === "slots" ? "slots" : "wheel",
       // Default to columns for boards created before the layout field.
       layout: this.getMeta("layout") === "canvas" ? "canvas" : "columns",
+      // Live cursors are OFF unless a facilitator opted in (protects the free
+      // tier); default off for boards created before the field.
+      cursorsEnabled: this.getMeta("cursorsEnabled") === "1",
     };
   }
 
@@ -3621,11 +3744,21 @@ function rowToParticipant(row: ParticipantRow): Participant {
 }
 
 function rowToColumn(row: Record<string, SqlStorageValue>): Column {
+  const rect =
+    row.rect_x === null || row.rect_x === undefined
+      ? null
+      : {
+          x: Number(row.rect_x),
+          y: Number(row.rect_y),
+          w: Number(row.rect_w),
+          h: Number(row.rect_h),
+        };
   return {
     id: String(row.id),
     name: String(row.name),
     order: Number(row.ord),
     hidden: Number(row.hidden) === 1,
+    rect,
   };
 }
 
