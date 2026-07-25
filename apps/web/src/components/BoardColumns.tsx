@@ -130,7 +130,7 @@ export function BoardColumns(props: BoardColumnsProps) {
       {
         type: "column.created",
         seq: 0,
-        column: { id: columnId, name, order, hidden: false },
+        column: { id: columnId, name, order, hidden: false, rect: null },
       },
     );
     setNewColumnName("");

@@ -17,6 +17,7 @@ const column: Column = {
   name: "Went well",
   order: 0,
   hidden: false,
+  rect: null,
 };
 const note: Note = {
   id: "a".repeat(32),
@@ -48,6 +49,8 @@ test("canvas drag commits exactly ONE note.move on drop and ZERO during the move
         isAdmin
         presenterId={null}
         gifsEnabled={false}
+        cursors={{}}
+        cursorsEnabled={false}
       />
     </ConnectionProvider>,
   );
@@ -113,6 +116,8 @@ test("tidy sends exactly ONE note.moveMany for all movable cards", async () => {
         isAdmin
         presenterId={null}
         gifsEnabled={false}
+        cursors={{}}
+        cursorsEnabled={false}
       />
     </ConnectionProvider>,
   );
@@ -125,6 +130,53 @@ test("tidy sends exactly ONE note.moveMany for all movable cards", async () => {
   };
   expect(command.type).toBe("note.moveMany");
   expect(command.moves).toHaveLength(3);
+});
+
+// Cursors OFF must produce ZERO traffic on pointer move (the free-tier gate);
+// ON sends a throttled presence.cursor.
+async function moveOverCanvas(enabled: boolean) {
+  const send = vi.fn();
+  const mutate = vi.fn();
+  const screen = await render(
+    <ConnectionProvider value={{ mutate, send }}>
+      <BoardCanvas
+        columns={[column]}
+        notes={[]}
+        columnCounts={{}}
+        roster={[you]}
+        you={you}
+        phase="write"
+        editing={{}}
+        isAdmin
+        presenterId={null}
+        gifsEnabled={false}
+        cursors={{}}
+        cursorsEnabled={enabled}
+      />
+    </ConnectionProvider>,
+  );
+  const vp = screen.getByTestId("canvas-viewport").element();
+  const rect = vp.getBoundingClientRect();
+  vp.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 1,
+      clientX: rect.left + 60,
+      clientY: rect.top + 60,
+      bubbles: true,
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return send.mock.calls.some(
+    (c) => (c[0] as { type?: string })?.type === "presence.cursor",
+  );
+}
+
+test("cursors OFF send nothing on pointer move (free-tier gate)", async () => {
+  expect(await moveOverCanvas(false)).toBe(false);
+});
+
+test("cursors ON send a presence.cursor on pointer move", async () => {
+  expect(await moveOverCanvas(true)).toBe(true);
 });
 
 test("double-clicking empty canvas space opens a composer", async () => {
@@ -143,6 +195,8 @@ test("double-clicking empty canvas space opens a composer", async () => {
         isAdmin
         presenterId={null}
         gifsEnabled={false}
+        cursors={{}}
+        cursorsEnabled={false}
       />
     </ConnectionProvider>,
   );

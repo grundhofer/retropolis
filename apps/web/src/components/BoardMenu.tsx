@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import {
+  CURSORS_ACTIVATABLE,
   EXPORT_FORMATS,
   layoutModes,
   pickerStyles,
@@ -19,6 +20,7 @@ export function BoardMenu({
   boardName,
   isAdmin,
   gifsEnabled,
+  cursorsEnabled,
   pickerStyle,
   layout,
   retentionAt,
@@ -27,6 +29,7 @@ export function BoardMenu({
   boardName: string;
   isAdmin: boolean;
   gifsEnabled: boolean;
+  cursorsEnabled: boolean;
   pickerStyle: PickerStyle;
   layout: LayoutMode;
   retentionAt: number | null;
@@ -131,6 +134,26 @@ export function BoardMenu({
                 />
                 {t("menu.gifsEnabled")}
               </label>
+              {/* Live cursors are built but activation is disabled for now
+                  (they would bill the free tier); flip CURSORS_ACTIVATABLE to
+                  bring this toggle back. */}
+              {CURSORS_ACTIVATABLE ? (
+                <label className="mb-2 flex items-center gap-1.5 text-zinc-600">
+                  <input
+                    type="checkbox"
+                    checked={cursorsEnabled}
+                    data-testid="cursors-toggle"
+                    onChange={(event) =>
+                      send({
+                        type: "admin.cursors.set",
+                        enabled: event.target.checked,
+                      })
+                    }
+                    className="accent-accent"
+                  />
+                  {t("menu.cursorsEnabled")}
+                </label>
+              ) : null}
               <div className="mb-2">
                 <p className="mb-1 text-zinc-600">{t("menu.layout")}</p>
                 <div className="flex gap-1.5" role="group">

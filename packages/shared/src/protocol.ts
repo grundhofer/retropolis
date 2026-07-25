@@ -4,7 +4,7 @@ import {
   icebreakerIdSchema,
   workingAgreementsSchema,
 } from "./domain/icebreakers.js";
-import { layoutModeSchema } from "./domain/layout.js";
+import { layoutModeSchema, zoneRectSchema } from "./domain/layout.js";
 import { phasePlanSchema, phaseSchema } from "./domain/phases.js";
 import {
   pickerStateSchema,
@@ -57,6 +57,10 @@ export const boardConfigSchema = z.object({
   /** board layout: classic columns or a freeform canvas of the same zones.
    *  Defaulted so boards created before the field parse as columns. */
   layout: layoutModeSchema.default("columns"),
+  /** live cursors on the canvas — OFF by default (continuous presence streams
+   *  eat the Cloudflare free tier; a facilitator opts in). Defaulted so older
+   *  boards parse as off. */
+  cursorsEnabled: z.boolean().default(false),
 });
 export type BoardConfig = z.infer<typeof boardConfigSchema>;
 
@@ -87,6 +91,10 @@ export const columnSchema = z.object({
   /** staged column: withheld from members (with its notes) until the
    *  facilitator reveals it. Defaulted so pre-M6 payloads parse as visible. */
   hidden: z.boolean().default(false),
+  /** freeform canvas placement (normalized [0,1] of the world); null = auto
+   *  row layout. Only used to draw the zone on a canvas board. Defaulted so
+   *  pre-canvas payloads parse. */
+  rect: zoneRectSchema.nullable().default(null),
 });
 export type Column = z.infer<typeof columnSchema>;
 
@@ -178,6 +186,13 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("presence.editing"),
     columnId: hexIdSchema.nullable(),
+  }),
+  // Live cursor on the canvas (normalized world position). Fire-and-forget,
+  // never persisted; the server drops it entirely unless cursors are enabled.
+  z.object({
+    type: z.literal("presence.cursor"),
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
   }),
   z.object({ type: z.literal("ready.set"), ready: z.boolean() }),
 
@@ -289,6 +304,14 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     columnId: hexIdSchema,
     hidden: z.boolean(),
   }),
+  // Move/resize a zone on the canvas (facilitator). Pure layout over the same
+  // notes; committed once on drop (never per-frame).
+  z.object({
+    type: z.literal("admin.column.setRect"),
+    opId: hexIdSchema,
+    columnId: hexIdSchema,
+    rect: zoneRectSchema,
+  }),
 
   // Voting targets are "votables": ungrouped notes or stacks (group ids).
   z.object({
@@ -382,6 +405,7 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
   }),
 
   z.object({ type: z.literal("admin.gifs.set"), enabled: z.boolean() }),
+  z.object({ type: z.literal("admin.cursors.set"), enabled: z.boolean() }),
   // Retention: keep the board (clear the 90-day auto-delete) or delete it now.
   z.object({ type: z.literal("admin.board.keep") }),
   z.object({ type: z.literal("admin.board.delete") }),
@@ -488,6 +512,13 @@ export const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("presence.editing"),
     participantId: z.string(),
     columnId: hexIdSchema.nullable(),
+  }),
+  // Broadcast to others only while cursors are enabled; ephemeral (not in sync).
+  z.object({
+    type: z.literal("presence.cursor"),
+    participantId: z.string(),
+    x: z.number(),
+    y: z.number(),
   }),
   z.object({
     type: z.literal("ready.changed"),
