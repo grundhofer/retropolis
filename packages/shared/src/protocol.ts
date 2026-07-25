@@ -234,6 +234,24 @@ export const clientCommandSchema = z.discriminatedUnion("type", [
     x: z.number().min(0).max(1).optional(),
     y: z.number().min(0).max(1).optional(),
   }),
+  // Tidy / arrange-all on the canvas: reposition many cards in ONE message
+  // (never a loop of note.move — inbound frames are billed 20:1). Each move is
+  // a canvas reposition within the card's zone; invalid moves are skipped.
+  z.object({
+    type: z.literal("note.moveMany"),
+    opId: hexIdSchema,
+    moves: z
+      .array(
+        z.object({
+          noteId: hexIdSchema,
+          columnId: hexIdSchema,
+          x: z.number().min(0).max(1),
+          y: z.number().min(0).max(1),
+        }),
+      )
+      .min(1)
+      .max(300),
+  }),
 
   z.object({ type: z.literal("admin.phase.set"), phase: phaseSchema }),
   z.object({
