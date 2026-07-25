@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router";
 import {
   boardSurface,
+  CURSORS_ACTIVATABLE,
   type BoardInfo,
   type ClientCommand,
   type ServerEvent,
@@ -312,6 +313,7 @@ function Room({
               boardName={state.board?.name ?? board.name}
               isAdmin={isAdmin}
               gifsEnabled={gifsEnabled}
+              cursorsEnabled={config?.cursorsEnabled ?? false}
               pickerStyle={config?.pickerStyle ?? "wheel"}
               layout={layout}
               retentionAt={state.retentionAt}
@@ -429,6 +431,10 @@ function Room({
                     isAdmin={isAdmin}
                     presenterId={presenterId}
                     gifsEnabled={gifsEnabled}
+                    cursors={state.cursors}
+                    cursorsEnabled={
+                      (config?.cursorsEnabled ?? false) && CURSORS_ACTIVATABLE
+                    }
                   />
                 ) : surface === "focus" && presenter ? (
                   <PresenterFocus

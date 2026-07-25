@@ -27,6 +27,7 @@ const column: Column = {
   name: "Went well",
   order: 0,
   hidden: false,
+  rect: null,
 };
 
 function note(id: string, authorId: string, text: string): Note {
@@ -58,6 +59,7 @@ const sync: ServerEvent = {
     gifsEnabled: true,
     pickerStyle: "wheel",
     layout: "columns",
+    cursorsEnabled: false,
   },
   phase: "write",
   timer: { endsAt: null, pausedRemainingMs: null },
@@ -415,6 +417,7 @@ describe("columns", () => {
       name: "To improve",
       order: 1,
       hidden: false,
+      rect: null,
     };
     state = applyServerEvent(state, {
       type: "column.created",

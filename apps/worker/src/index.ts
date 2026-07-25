@@ -97,6 +97,7 @@ app.post("/api/boards/:id/duplicate", async (c) => {
     name: column.name,
     order: index,
     hidden: column.hidden,
+    rect: column.rect,
   }));
   await boardStub(c.env, boardId).initialize({
     boardId,

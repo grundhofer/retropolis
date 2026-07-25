@@ -48,6 +48,9 @@ export interface ClientBoardState {
   columnCounts: Record<string, number>;
   /** ghost cards: participantId -> columnId they are currently writing in */
   editing: Record<string, string>;
+  /** live cursors: participantId -> normalized world position (only while the
+   *  facilitator has cursors enabled). Ephemeral — never part of a sync. */
+  cursors: Record<string, { x: number; y: number }>;
   /** presenter rotation; null until the board first enters "present" */
   picker: PickerState | null;
   /** the wheel animation currently (or most recently) playing */
@@ -83,6 +86,7 @@ export const initialBoardState: ClientBoardState = {
   notes: [],
   columnCounts: {},
   editing: {},
+  cursors: {},
   picker: null,
   lastSpin: null,
   votes: EMPTY_VOTES,
@@ -119,6 +123,7 @@ export function applyServerEvent(
         notes: event.notes,
         columnCounts: event.columnCounts,
         editing: {},
+        cursors: {},
         picker: event.picker,
         lastSpin: event.lastSpin,
         votes: event.votes,
@@ -273,7 +278,15 @@ export function applyServerEvent(
       );
       const editing = { ...state.editing };
       delete editing[event.participantId];
-      return { ...state, roster, editing, lastSeq: seq(state, event.seq) };
+      const cursors = { ...state.cursors };
+      delete cursors[event.participantId];
+      return {
+        ...state,
+        roster,
+        editing,
+        cursors,
+        lastSeq: seq(state, event.seq),
+      };
     }
 
     case "presence.editing": {
@@ -282,6 +295,15 @@ export function applyServerEvent(
       else editing[event.participantId] = event.columnId;
       return { ...state, editing };
     }
+
+    case "presence.cursor":
+      return {
+        ...state,
+        cursors: {
+          ...state.cursors,
+          [event.participantId]: { x: event.x, y: event.y },
+        },
+      };
 
     case "ready.changed": {
       const without = state.readyIds.filter((id) => id !== event.participantId);
@@ -349,6 +371,7 @@ export function applyServerEvent(
         columnCounts: {},
         readyIds: [],
         editing: {},
+        cursors: {},
         timer: IDLE_TIMER,
         lastSpin: null, // the picker itself persists across phase changes
         votes,
