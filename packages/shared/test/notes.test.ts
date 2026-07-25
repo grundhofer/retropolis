@@ -13,6 +13,8 @@ const annaNote: Note = {
   text: "Anna's secret draft",
   order: 1,
   gifUrl: null,
+  x: null,
+  y: null,
   groupId: null,
   reactions: {},
 };

@@ -4,7 +4,12 @@ import { parseServerEvent, type ServerEvent } from "@retropolis/shared";
 
 export async function createBoard(
   name = "Sprint 12",
-  options: { template?: string; locale?: string; checkin?: boolean } = {},
+  options: {
+    template?: string;
+    locale?: string;
+    checkin?: boolean;
+    layout?: "columns" | "canvas";
+  } = {},
 ): Promise<{
   boardId: string;
   adminToken: string;
