@@ -408,6 +408,35 @@ describe("canvas layout & positions", () => {
     expect(moved.note.groupId).toBeNull();
   });
 
+  it("note.moveMany repositions many cards in ONE frame", async () => {
+    const { boardId, adminToken } = await createBoard();
+    const admin = await joined(boardId, "Anna", adminToken);
+    await toPhase(admin.socket, "write");
+    const columnId = admin.sync.columns[0]?.id;
+    if (!columnId) throw new Error("setup");
+    const a = await createNote(admin.socket, columnId, "a");
+    const b = await createNote(admin.socket, columnId, "b");
+    admin.socket.send({
+      type: "note.moveMany",
+      opId: opId(),
+      moves: [
+        { noteId: a, columnId, x: 0.2, y: 0.3 },
+        { noteId: b, columnId, x: 0.7, y: 0.8 },
+      ],
+    });
+    const movedA = await admin.socket.waitFor(
+      (e) => e.type === "note.updated" && e.note.id === a && e.note.x === 0.2,
+    );
+    const movedB = await admin.socket.waitFor(
+      (e) => e.type === "note.updated" && e.note.id === b && e.note.x === 0.7,
+    );
+    if (movedA.type !== "note.updated" || movedB.type !== "note.updated") {
+      throw new Error("unreachable");
+    }
+    expect(movedA.note.y).toBe(0.3);
+    expect(movedB.note.y).toBe(0.8);
+  });
+
   it("same-zone canvas reposition KEEPS a stack; column-mode drag (no x) still ungroups", async () => {
     const { boardId, adminToken } = await createBoard();
     const admin = await joined(boardId, "Anna", adminToken);

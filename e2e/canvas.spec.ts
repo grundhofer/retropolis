@@ -21,6 +21,9 @@ test("canvas layout: freeform zones, add-by-double-click, and the live switch", 
   const zones = page.getByTestId(/^zone-/);
   await expect(zones.first()).toBeVisible();
   await expect(page.getByTestId(/^composer-/)).toHaveCount(0);
+  // Canvas tools: tidy + zoom controls.
+  await expect(page.getByTestId("canvas-tidy")).toBeVisible();
+  await expect(page.getByTestId("canvas-viewport")).toBeVisible();
 
   // Double-click empty canvas space → an inline composer at that spot.
   await zones.first().dblclick({ position: { x: 130, y: 130 } });

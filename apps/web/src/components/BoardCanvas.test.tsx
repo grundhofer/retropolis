@@ -91,6 +91,42 @@ test("canvas drag commits exactly ONE note.move on drop and ZERO during the move
   expect(command.x).toBeLessThanOrEqual(1);
 });
 
+// Tidy must coalesce into ONE frame, never a loop of note.move (20:1 billing).
+test("tidy sends exactly ONE note.moveMany for all movable cards", async () => {
+  const mutate = vi.fn();
+  const send = vi.fn();
+  const notes: Note[] = [
+    note,
+    { ...note, id: "b".repeat(32), text: "two" },
+    { ...note, id: "d".repeat(32), text: "three" },
+  ];
+  const screen = await render(
+    <ConnectionProvider value={{ mutate, send }}>
+      <BoardCanvas
+        columns={[column]}
+        notes={notes}
+        columnCounts={{}}
+        roster={[you]}
+        you={you}
+        phase="write"
+        editing={{}}
+        isAdmin
+        presenterId={null}
+        gifsEnabled={false}
+      />
+    </ConnectionProvider>,
+  );
+
+  await screen.getByTestId("canvas-tidy").click();
+  expect(mutate).toHaveBeenCalledTimes(1);
+  const command = mutate.mock.calls[0]?.[0] as {
+    type: string;
+    moves: unknown[];
+  };
+  expect(command.type).toBe("note.moveMany");
+  expect(command.moves).toHaveLength(3);
+});
+
 test("double-clicking empty canvas space opens a composer", async () => {
   const mutate = vi.fn();
   const send = vi.fn();

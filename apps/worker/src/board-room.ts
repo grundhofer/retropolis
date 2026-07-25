@@ -447,6 +447,9 @@ export class BoardRoom extends DurableObject<Env> {
       case "note.move":
         this.handleNoteMove(ws, participant, command);
         return;
+      case "note.moveMany":
+        this.handleNoteMoveMany(ws, participant, command);
+        return;
       case "admin.picker.spin":
         this.handlePickerSpin(ws, participant);
         return;
@@ -1724,6 +1727,60 @@ export class BoardRoom extends DurableObject<Env> {
     }
     // Moving between columns during write shifts the per-column totals.
     this.broadcastColumnCountsIfWriting();
+  }
+
+  // Tidy / arrange-all: apply many canvas repositions from ONE frame. Each move
+  // stays within its own zone (columnId unchanged) and follows the same
+  // visibility/authorship rules as a single reposition; invalid moves are
+  // silently skipped so a stale card in the batch can't fail the whole tidy.
+  private handleNoteMoveMany(
+    ws: WebSocket,
+    participant: ParticipantRow,
+    cmd: Extract<ClientCommand, { type: "note.moveMany" }>,
+  ): void {
+    const phase = this.phase();
+    if (phase !== "write" && phase !== "present") {
+      this.reject(
+        ws,
+        cmd.opId,
+        "PHASE_LOCKED",
+        "The board is locked for reorganizing",
+      );
+      return;
+    }
+    const hidden = this.hiddenColumnsFor(participant);
+    const movedIds: string[] = [];
+    for (const move of cmd.moves) {
+      const row = this.noteRowById(move.noteId);
+      if (
+        row === null ||
+        // invisible to the caller, or a member's foreign note pre-reveal
+        !noteVisibleTo(
+          { authorId: row.author_id, columnId: row.column_id },
+          participant.id,
+          phase,
+          hidden,
+        ) ||
+        // before the reveal you only tidy your own cards
+        (phase === "write" && row.author_id !== participant.id) ||
+        // tidy keeps a card in its zone — ignore a cross-zone move here
+        move.columnId !== row.column_id
+      ) {
+        continue;
+      }
+      this.sql.exec(
+        "UPDATE notes SET pos_x = ?, pos_y = ? WHERE id = ?",
+        move.x,
+        move.y,
+        move.noteId,
+      );
+      movedIds.push(move.noteId);
+    }
+    this.ack(ws, cmd.opId);
+    for (const id of movedIds) {
+      const updated = this.noteById(id);
+      if (updated !== null) this.broadcastNoteReorg(updated);
+    }
   }
 
   /** Keeps two invariants after a note leaves (or is deleted from) a group:

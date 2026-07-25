@@ -139,6 +139,10 @@ const resources = {
       },
       canvas: {
         hint: "Double-click to add a note",
+        tidy: "Tidy up",
+        zoomIn: "Zoom in",
+        zoomOut: "Zoom out",
+        fit: "Fit to screen",
       },
       present: {
         focus: {
@@ -435,6 +439,10 @@ const resources = {
       },
       canvas: {
         hint: "Doppelklick zum Hinzufügen",
+        tidy: "Aufräumen",
+        zoomIn: "Vergrößern",
+        zoomOut: "Verkleinern",
+        fit: "An Fenster anpassen",
       },
       present: {
         focus: {
