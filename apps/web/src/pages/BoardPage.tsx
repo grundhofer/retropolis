@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router";
@@ -19,6 +22,7 @@ import { DiscussBar } from "../components/DiscussBar.js";
 import { KudosWall } from "../components/KudosWall.js";
 import { RotiPoll } from "../components/RotiPoll.js";
 import { LanguageToggle } from "../components/LanguageToggle.js";
+import { LegalFooter } from "../components/LegalFooter.js";
 import { PhaseStepper } from "../components/PhaseStepper.js";
 import { PresenceRail } from "../components/PresenceRail.js";
 import { ReadyBar } from "../components/ReadyBar.js";
@@ -143,6 +147,7 @@ function JoinGate({
           </button>
         </form>
       </main>
+      <LegalFooter />
     </div>
   );
 }
@@ -493,6 +498,7 @@ function Room({
             </div>
           )}
         </main>
+        <LegalFooter />
       </div>
     </ConnectionProvider>
   );

@@ -39,3 +39,20 @@ CI deploys are gated: set the repo variable `CLOUDFLARE_DEPLOY=true` plus the
 
 Note: board DOs are pinned to the EU jurisdiction in production; local workerd
 does not implement jurisdictions (see `apps/worker/src/board-stub.ts`).
+
+## Contributing
+
+Pull requests need a signed [Contributor License Agreement](CLA.md) — a bot checks this and tells you
+what to do. Read [CONTRIBUTING.md](CONTRIBUTING.md) first; it explains the reasoning and the house
+rules. Open an issue before building anything larger than a bug fix.
+
+## License
+
+Copyright © 2026 Sebastian Grundhöfer.
+
+Retropolis is free software under the **GNU Affero General Public License v3.0 or later** — see
+[LICENSE](LICENSE). Every source file carries an [SPDX](https://reuse.software) header.
+
+If you run a modified Retropolis and let others reach it over a network, AGPL §13 requires you to
+offer those users the source of your version. The licence rationale, the monetisation model it keeps
+open, and the dependency-licence policy are documented in [docs/06-legal.md](docs/06-legal.md).

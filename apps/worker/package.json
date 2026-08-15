@@ -2,6 +2,7 @@
   "name": "@retropolis/worker",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "check": "tsc --noEmit",
     "types": "wrangler types",

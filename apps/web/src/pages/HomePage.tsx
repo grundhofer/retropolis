@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -8,6 +11,7 @@ import {
   type TemplateKey,
 } from "@retropolis/shared";
 import { LanguageToggle } from "../components/LanguageToggle.js";
+import { LegalFooter } from "../components/LegalFooter.js";
 import { createBoard } from "../lib/api.js";
 import { saveAdminToken } from "../lib/session.js";
 
@@ -132,6 +136,7 @@ export function HomePage() {
           </form>
         </div>
       </main>
+      <LegalFooter />
     </div>
   );
 }
