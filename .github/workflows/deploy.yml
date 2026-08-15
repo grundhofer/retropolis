@@ -23,6 +23,8 @@ jobs:
         run: pnpm --filter @retropolis/web build
         env:
           CLOUDFLARE_ENV: preview
+          # AGPL §13: the running build must link to its own source
+          VITE_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
       - name: Upload preview version (alias pr-<number>)
         working-directory: apps/web
         run: pnpm exec wrangler versions upload --preview-alias pr-${{ github.event.number }}
@@ -42,6 +44,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @retropolis/web build
+        env:
+          # AGPL §13: the running build must link to its own source
+          VITE_COMMIT_SHA: ${{ github.sha }}
       - name: Deploy to production
         working-directory: apps/web
         run: pnpm exec wrangler deploy

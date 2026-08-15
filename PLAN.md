@@ -13,6 +13,7 @@ Created 2026-07-17 from a multi-agent research pass (11 competitor deep-dives, C
 | [03-competitive-analysis.md](docs/03-competitive-analysis.md) | Market read, feature matrix across 11 tools, table stakes, differentiators, deliberate skips, per-competitor profiles                                                           |
 | [04-roadmap.md](docs/04-roadmap.md)                           | M0 walking skeleton → M4 launch, then v1.x / v2 / later                                                                                                                         |
 | [05-privacy-gdpr.md](docs/05-privacy-gdpr.md)                 | GDPR + §87 BetrVG works-council playbook, data inventory, sub-processors, rollout checklist                                                                                     |
+| [06-legal.md](docs/06-legal.md)                               | AGPL-3.0 decision & monetisation model, CLA rationale, dependency-licence policy, trademark findings and filing plan, pre-launch legal checklist                                |
 
 ## Decisions locked (2026-07-17)
 
@@ -26,5 +27,5 @@ Created 2026-07-17 from a multi-agent research pass (11 competitor deep-dives, C
 
 ## Open questions (user decision needed before launch, none block development)
 
-1. **Domain/name:** `retropolis.de` is taken. Register **getretropolis.de** (recommended; verified available 2026-07-17), `retropolis-app.de`, `retropolis24.de` — or rename? Only one .de will be registered.
+1. **Domain/name:** `retropolis.de` is taken. Register **getretropolis.de** (recommended; verified available 2026-07-17), `retropolis-app.de`, `retropolis24.de` — or rename? Only one .de will be registered. **Decide this together with the trademark question:** "Retropolis" is already in commercial use by three unrelated games in Nice class 9 — run the register search in [docs/06-legal.md](docs/06-legal.md) before committing to the name, while the repo is still private and renaming is free.
 2. **Works council:** does the company have a Betriebsrat? If yes, start the §87 BetrVG conversation during M1 (see docs/05).
