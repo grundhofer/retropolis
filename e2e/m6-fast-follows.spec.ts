@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { expect, test, type Page } from "@playwright/test";
 
 // M6 acceptance: the three v1.x fast-follows — staged/hidden columns, board

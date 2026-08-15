@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { expect, test } from "@playwright/test";
 
 // The M0 definition of done: two browsers see each other join a board.

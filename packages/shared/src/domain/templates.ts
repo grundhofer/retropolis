@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { z } from "zod";
 
 export const BOARD_LOCALES = ["en", "de"] as const;

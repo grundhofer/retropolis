@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { searchGifs, type GifResult } from "../lib/gifs.js";

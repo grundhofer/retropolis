@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { generateHexId, HEX_ID_PATTERN, hexIdSchema } from "./ids.js";
 
 // Session keys are client-minted BEFORE the first join and sent with every

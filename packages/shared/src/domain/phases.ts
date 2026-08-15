@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { z } from "zod";
 
 // The full session flow (product spec §3). lobby/write/present/done are the

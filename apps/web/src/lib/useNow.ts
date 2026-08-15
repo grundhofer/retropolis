@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useSyncExternalStore } from "react";
 
 // The wall clock as an external store: a countdown must read Date.now(), and
