@@ -90,7 +90,7 @@ Retropolis runs on the Cloudflare free tier — one Worker plus a SQLite-backed 
 git clone https://github.com/grundhofer/retropolis.git
 cd retropolis
 pnpm install
-pnpm --filter @retropolis/web deploy   # needs `wrangler login`
+pnpm --filter @retropolis/web run deploy   # needs `wrangler login`
 ```
 
 Optional: set `KLIPY_API_KEY` as a Worker secret to switch on GIF search. Without it, GIF search simply reports itself as unavailable.
@@ -125,7 +125,7 @@ Domain logic lives in `packages/shared` as pure functions and is tested there; t
 
 ### Deployment
 
-`pnpm --filter @retropolis/web deploy` builds and deploys via wrangler (needs `wrangler login`).
+`pnpm --filter @retropolis/web run deploy` builds and deploys via wrangler (needs `wrangler login`).
 CI deploys are gated: set the repo variable `CLOUDFLARE_DEPLOY=true` plus the
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets. PR previews go to the
 `preview` environment (separate worker + DO namespace, alias `pr-<number>`).
