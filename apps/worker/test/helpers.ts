@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { SELF } from "cloudflare:test";
 import { expect } from "vitest";
 import { parseServerEvent, type ServerEvent } from "@retropolis/shared";

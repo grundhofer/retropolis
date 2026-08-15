@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { boardInfoSchema, type BoardInfo } from "@retropolis/shared";
 import { z } from "zod";
 

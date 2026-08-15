@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 const SOUND_KEY = "retropolis.sound";
 
 export function soundEnabled(): boolean {

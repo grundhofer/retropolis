@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 export * from "./protocol.js";
 export * from "./ids.js";
 export * from "./session-key.js";

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { expect, test } from "vitest";
 import { render } from "vitest-browser-react";
 import type { Participant } from "@retropolis/shared";

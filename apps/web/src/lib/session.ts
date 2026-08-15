@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { generateSessionKey, SESSION_KEY_PATTERN } from "@retropolis/shared";
 
 // Per-board capability and identity storage. Everything lives in

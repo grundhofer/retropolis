@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // A compact, dependency-free emoji picker (native Unicode — zero bytes, zero
 // third-party requests, GDPR-safe). A curated set covers the common retro
 // reactions; the full emoji-picker-element (thousands + search) is a deferred

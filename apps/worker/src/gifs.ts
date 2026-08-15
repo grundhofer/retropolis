@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // GIF search is proxied through the Worker so the API key stays server-side
 // and employee IPs / search terms never reach the provider directly (privacy,
 // see docs/05). The provider is isolated behind this one module — GIFs are a
