@@ -26,7 +26,9 @@ jobs:
         with:
           path-to-document: https://github.com/grundhofer/retropolis/blob/main/CLA.md
           # signatures live in this repo, so GITHUB_TOKEN suffices — no PAT needed.
-          # the branch is created on the first signature and must NOT be protected.
+          # the cla-signatures branch must ALREADY EXIST: the action does not
+          # create it and fails the check with "Branch cla-signatures not found".
+          # It must also never be branch-protected — every signature is a commit.
           path-to-signatures: signatures/cla.json
           branch: cla-signatures
           allowlist: grundhofer,dependabot[bot],renovate[bot]
