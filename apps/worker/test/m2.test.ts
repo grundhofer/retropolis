@@ -290,8 +290,7 @@ describe("write-phase card counts", () => {
     // Ben cannot see Anna's note before the reveal — but learns the count.
     await createNote(admin.socket, columnId, "secret");
     const counts = await ben.socket.waitFor(
-      (e) =>
-        e.type === "board.columnCounts" && (e.counts[columnId] ?? 0) === 1,
+      (e) => e.type === "board.columnCounts" && (e.counts[columnId] ?? 0) === 1,
     );
     if (counts.type !== "board.columnCounts") throw new Error("unreachable");
     expect(counts.counts[columnId]).toBe(1);
@@ -303,8 +302,7 @@ describe("write-phase card counts", () => {
     // A second author's note bumps the total to 2 for everyone.
     await createNote(ben.socket, columnId, "mine");
     const bumped = await admin.socket.waitFor(
-      (e) =>
-        e.type === "board.columnCounts" && (e.counts[columnId] ?? 0) === 2,
+      (e) => e.type === "board.columnCounts" && (e.counts[columnId] ?? 0) === 2,
     );
     expect(bumped.type).toBe("board.columnCounts");
   });
@@ -377,7 +375,8 @@ describe("canvas layout & positions", () => {
       y: 0.75,
     });
     const moved = await admin.socket.waitFor(
-      (e) => e.type === "note.updated" && e.note.id === noteId && e.note.x === 0.25,
+      (e) =>
+        e.type === "note.updated" && e.note.id === noteId && e.note.x === 0.25,
     );
     if (moved.type !== "note.updated") throw new Error("unreachable");
     expect(moved.note.y).toBe(0.75);
@@ -454,9 +453,9 @@ describe("canvas layout & positions", () => {
     // Off → a cursor frame is dropped entirely (free-tier gate).
     ben.socket.send({ type: "presence.cursor", x: 0.5, y: 0.5 });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(
-      admin.socket.events.some((e) => e.type === "presence.cursor"),
-    ).toBe(false);
+    expect(admin.socket.events.some((e) => e.type === "presence.cursor")).toBe(
+      false,
+    );
 
     // Members cannot toggle settings.
     ben.socket.send({ type: "admin.cursors.set", enabled: true });
@@ -523,7 +522,8 @@ describe("canvas layout & positions", () => {
       targetNoteId: a,
     });
     await admin.socket.waitFor(
-      (e) => e.type === "note.updated" && e.note.id === b && e.note.groupId !== null,
+      (e) =>
+        e.type === "note.updated" && e.note.id === b && e.note.groupId !== null,
     );
 
     // Canvas reposition of the stacked note (x present) → keeps the stack.
@@ -549,7 +549,8 @@ describe("canvas layout & positions", () => {
       columnId,
     });
     const ungrouped = await admin.socket.waitFor(
-      (e) => e.type === "note.updated" && e.note.id === b && e.note.groupId === null,
+      (e) =>
+        e.type === "note.updated" && e.note.id === b && e.note.groupId === null,
     );
     expect(ungrouped.type).toBe("note.updated");
   });

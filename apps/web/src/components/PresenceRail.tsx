@@ -206,11 +206,7 @@ export function PresenceRail({
 }
 
 type RotationStatus =
-  | "current"
-  | "presented"
-  | "remaining"
-  | "excluded"
-  | "other";
+  "current" | "presented" | "remaining" | "excluded" | "other";
 
 function rotationStatus(
   picker: PickerState | null,
@@ -273,7 +269,9 @@ function PresenceRow({
         }`}
       >
         {participant.name}
-        {isYou ? <span className="text-zinc-400"> {t("roster.you")}</span> : null}
+        {isYou ? (
+          <span className="text-zinc-400"> {t("roster.you")}</span>
+        ) : null}
       </span>
 
       {mode === "ready" ? (
