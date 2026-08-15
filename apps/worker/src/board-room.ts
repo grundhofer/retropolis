@@ -281,7 +281,9 @@ export class BoardRoom extends DurableObject<Env> {
       creation.adminToken,
       String(now),
       config?.anonymous ? "1" : "0",
-      JSON.stringify(config?.phasePlan ?? creation.phasePlan ?? DEFAULT_PHASE_PLAN),
+      JSON.stringify(
+        config?.phasePlan ?? creation.phasePlan ?? DEFAULT_PHASE_PLAN,
+      ),
       config === undefined || config.gifsEnabled ? "1" : "0",
       config?.pickerStyle ?? "wheel",
       config?.layout ?? creation.layout ?? "columns",
@@ -1493,7 +1495,12 @@ export class BoardRoom extends DurableObject<Env> {
     cmd: Extract<ClientCommand, { type: "admin.column.setRect" }>,
   ): void {
     if (participant.role !== "facilitator") {
-      this.reject(ws, cmd.opId, "NOT_ADMIN", "Only the facilitator moves zones");
+      this.reject(
+        ws,
+        cmd.opId,
+        "NOT_ADMIN",
+        "Only the facilitator moves zones",
+      );
       return;
     }
     const column = this.columnById(cmd.columnId);
@@ -2063,10 +2070,7 @@ export class BoardRoom extends DurableObject<Env> {
   // The person on stage marks their own turn done (member OR facilitator).
   // A stale click (the facilitator already advanced) fails the sender===current
   // check and rejects — the client resyncs off that.
-  private handlePickerDone(
-    ws: WebSocket,
-    participant: ParticipantRow,
-  ): void {
+  private handlePickerDone(ws: WebSocket, participant: ParticipantRow): void {
     if (this.phase() !== "present") {
       this.reject(
         ws,
