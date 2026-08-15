@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -203,11 +206,7 @@ export function PresenceRail({
 }
 
 type RotationStatus =
-  | "current"
-  | "presented"
-  | "remaining"
-  | "excluded"
-  | "other";
+  "current" | "presented" | "remaining" | "excluded" | "other";
 
 function rotationStatus(
   picker: PickerState | null,
@@ -270,7 +269,9 @@ function PresenceRow({
         }`}
       >
         {participant.name}
-        {isYou ? <span className="text-zinc-400"> {t("roster.you")}</span> : null}
+        {isYou ? (
+          <span className="text-zinc-400"> {t("roster.you")}</span>
+        ) : null}
       </span>
 
       {mode === "ready" ? (

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useConnection } from "../lib/connection.js";

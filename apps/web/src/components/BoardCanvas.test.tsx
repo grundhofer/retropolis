@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { expect, test, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import type { Column, Note, Participant } from "@retropolis/shared";
@@ -63,7 +66,12 @@ test("canvas drag commits exactly ONE note.move on drop and ZERO during the move
   const dropX = rect.left + rect.width * 0.25;
   const dropY = rect.top + rect.height * 0.25;
   const ev = (type: string, x: number, y: number) =>
-    new PointerEvent(type, { pointerId: 1, clientX: x, clientY: y, bubbles: true });
+    new PointerEvent(type, {
+      pointerId: 1,
+      clientX: x,
+      clientY: y,
+      bubbles: true,
+    });
   // Real pointer events arrive across ticks; flush React state between them so
   // the move/up handlers see the drag started on pointerdown.
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));

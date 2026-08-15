@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -54,7 +57,8 @@ export function NoteCard({
   const author =
     note.authorId === null ? null : roster.find((p) => p.id === note.authorId);
   const revealed = phaseRevealed(phase) && phase !== "done";
-  const canEdit = interactive && mine && (phase === "write" || phase === "present");
+  const canEdit =
+    interactive && mine && (phase === "write" || phase === "present");
   const canDelete = interactive && (mine || isAdmin) && phase !== "done";
   // Reorganizing (drag to group/move, unstack) happens in write (own notes)
   // and present (everyone) — frozen once voting starts, stacks are votables.
@@ -136,7 +140,7 @@ export function NoteCard({
       }}
       className={`reveal-in rounded-xl border bg-white p-3 shadow-sm transition-opacity ${
         dropHover ? "border-accent ring-2 ring-accent/40" : "border-zinc-200"
-      } ${spotlighted ? "ring-2 ring-accent shadow-md" : ""} ${dimmed ? "opacity-45" : ""} ${
+      } ${spotlighted ? "shadow-md ring-2 ring-accent" : ""} ${dimmed ? "opacity-45" : ""} ${
         canDrag && !editing ? "cursor-grab active:cursor-grabbing" : ""
       }`}
       style={{ animationDelay: `${Math.min(revealIndex, 12) * 45}ms` }}

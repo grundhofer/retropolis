@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Fixed palette assigned server-side on join: guarantees distinct colors for
 // up to 12 participants (typical retro size), then cycles.
 export const PARTICIPANT_COLORS = [

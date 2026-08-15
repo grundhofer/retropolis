@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import {
   env,
   runDurableObjectAlarm,
@@ -37,9 +40,7 @@ async function joined(
 
 async function advance(
   admin: { socket: TestSocket },
-  phases: ReadonlyArray<
-    "write" | "present" | "vote" | "discuss" | "close"
-  >,
+  phases: ReadonlyArray<"write" | "present" | "vote" | "discuss" | "close">,
 ): Promise<void> {
   for (const phase of phases) {
     admin.socket.send({ type: "admin.phase.set", phase });

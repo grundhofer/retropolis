@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
@@ -303,6 +306,12 @@ const resources = {
         body: "This board does not exist or has been deleted.",
         home: "Create a new board",
       },
+      legal: {
+        license: "Free software: AGPL-3.0-or-later",
+        redistribute: "Redistribution and modification permitted, no warranty.",
+        source: "Source code",
+        sourceVersion: "Source code of the version running here",
+      },
     },
   },
   de: {
@@ -607,6 +616,12 @@ const resources = {
         title: "Board nicht gefunden",
         body: "Dieses Board existiert nicht oder wurde gelöscht.",
         home: "Neues Board erstellen",
+      },
+      legal: {
+        license: "Freie Software: AGPL-3.0-or-later",
+        redistribute: "Weitergabe und Änderung erlaubt, ohne Gewährleistung.",
+        source: "Quelltext",
+        sourceVersion: "Quelltext der hier laufenden Version",
       },
     },
   },

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Lazy-loaded so the wheel/celebration chunk never taxes the first paint.
 export async function burstConfetti(): Promise<void> {
   try {

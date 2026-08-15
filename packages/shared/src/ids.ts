@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import { z } from "zod";
 
 // Client-minted 128-bit hex ids (notes, ops, columns): letting the client

@@ -2,11 +2,12 @@
   "name": "@retropolis/web",
   "private": true,
   "type": "module",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "vite build && wrangler deploy",
+    "deploy": "VITE_COMMIT_SHA=$(git rev-parse HEAD) vite build && wrangler deploy",
     "check": "tsc --noEmit",
     "test": "vitest run"
   },

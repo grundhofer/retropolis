@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Sebastian Grundhöfer
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // 128-bit random hex ids. Board ids and admin tokens are capability secrets:
 // whoever has the string has the access, so they must be unguessable.
 export function generateSecret(): string {
